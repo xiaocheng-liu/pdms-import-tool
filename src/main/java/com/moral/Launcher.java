@@ -1,6 +1,7 @@
 package com.moral;
 
 import com.moral.ui.MainFrame;
+import com.moral.util.AppIcons;
 import com.moral.util.PlatformUtil;
 import com.formdev.flatlaf.FlatLightLaf;
 
@@ -23,9 +24,12 @@ public final class Launcher {
             // 主题设置失败时使用系统默认外观
         }
         PlatformUtil.init();
+        AppIcons.applyToTaskbar();
         SwingUtilities.invokeLater(() -> {
             try {
-                new MainFrame().setVisible(true);
+                MainFrame frame = new MainFrame();
+                AppIcons.applyTo(frame);
+                frame.setVisible(true);
             } catch (Throwable error) {
                 error.printStackTrace();
                 JOptionPane.showMessageDialog(null, "界面初始化失败：" + error.getMessage(), "错误", JOptionPane.ERROR_MESSAGE);

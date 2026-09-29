@@ -26,6 +26,8 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -137,10 +139,16 @@ public final class ImportEngine {
 
         pool = Executors.newFixedThreadPool(options.getThreads(), new NamedThreadFactory());
         ExecutorService currentPool = pool;
+        // 分片任务结果：主线程提交、进度 ticker 线程读取，需同步访问
+        final Map<CsvTable, List<Future<Boolean>>> futures = Collections.synchronizedMap(new LinkedHashMap<>());
+        // 已定稿（状态已落定）的表，避免重复定稿与重复回调
+        final Set<CsvTable> finalizedTables = ConcurrentHashMap.newKeySet();
         ScheduledExecutorService ticker = Executors.newSingleThreadScheduledExecutor(new NamedThreadFactory("progress-ticker"));
         ticker.scheduleAtFixedRate(new Runnable() {
             @Override
             public void run() {
+                // 某张表的全部分片结束后立即定稿，不必等其它表跑完才一起汇总
+                finalizeFinishedTables(futures, finalizedTables, cancelled, listener);
                 listener.onTick();
             }
         }, 500, 500, TimeUnit.MILLISECONDS);
@@ -149,7 +157,6 @@ public final class ImportEngine {
             listener.onLog("极速模式已开启：" + describeFastMode(dialect));
         }
 
-        Map<CsvTable, List<Future<Boolean>>> futures = new LinkedHashMap<>();
         try (Connection prepareConn = ConnectionFactory.create(config)) {
             for (CsvTable table : tables) {
                 if (cancelled.get()) {
@@ -238,13 +245,82 @@ public final class ImportEngine {
     private static String describeFastMode(Dialect dialect) {
         switch (dialect.type()) {
             case POSTGRESQL:
-                return "PostgreSQL COPY 批量加载（失败自动降级为标准 INSERT）";
+            case KINGBASE:
+                return dialect.type().getDisplayName() + " COPY 批量加载（失败自动降级为标准 INSERT）";
+            case MYSQL:
+                return "MySQL LOAD DATA LOCAL INFILE 批量加载（失败自动降级为标准 INSERT）";
             case ORACLE:
             case DAMENG:
                 return dialect.type().getDisplayName() + " 直接路径插入 APPEND，单分片写入（失败自动降级为标准 INSERT）";
             default:
                 return "标准批量写入";
         }
+    }
+
+    /**
+     * 逐表检查：某张表的所有分片任务都结束后立即定稿状态并回调界面，
+     * 让"完成"状态与行数实时可见，而不是等全部表跑完才一起汇总。
+     */
+    private void finalizeFinishedTables(Map<CsvTable, List<Future<Boolean>>> futures,
+                                        Set<CsvTable> finalizedTables,
+                                        AtomicBoolean cancelled,
+                                        ProgressListener listener) {
+        List<Map.Entry<CsvTable, List<Future<Boolean>>>> snapshot;
+        synchronized (futures) {
+            snapshot = new ArrayList<>(futures.entrySet());
+        }
+        for (Map.Entry<CsvTable, List<Future<Boolean>>> entry : snapshot) {
+            finalizeTable(entry.getKey(), entry.getValue(), finalizedTables, cancelled, listener);
+        }
+    }
+
+    /** 单表定稿；仍有分片未结束时退回，等下一次 tick 再判定 */
+    private void finalizeTable(CsvTable table,
+                               List<Future<Boolean>> tableFutures,
+                               Set<CsvTable> finalizedTables,
+                               AtomicBoolean cancelled,
+                               ProgressListener listener) {
+        if (tableFutures == null || tableFutures.isEmpty() || !finalizedTables.add(table)) {
+            return;
+        }
+        boolean ok = true;
+        String error = "";
+        for (Future<Boolean> future : tableFutures) {
+            if (!future.isDone()) {
+                finalizedTables.remove(table);
+                return;
+            }
+            try {
+                Boolean value = future.get();
+                if (value == null || !value) {
+                    ok = false;
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                ok = false;
+            } catch (Exception e) {
+                ok = false;
+                Throwable cause = e.getCause() == null ? e : e.getCause();
+                error = String.valueOf(cause.getMessage());
+            }
+        }
+        TableProgress progress = table.getProgress();
+        if (cancelled.get() && progress.getStatus() == TableStatus.RUNNING) {
+            progress.setStatus(TableStatus.CANCELLED);
+            progress.setMessage("已取消");
+        } else if (ok) {
+            progress.setStatus(TableStatus.SUCCESS);
+            if (progress.getMessage() == null || progress.getMessage().isEmpty()) {
+                progress.setMessage("");
+            }
+        } else {
+            progress.setStatus(TableStatus.FAILED);
+            if (!error.isEmpty()) {
+                progress.setMessage(error);
+            }
+        }
+        progress.stop();
+        listener.onTableFinished(table);
     }
 
     private void summarize(Map<CsvTable, List<Future<Boolean>>> futures,
@@ -276,9 +352,13 @@ public final class ImportEngine {
                     error = String.valueOf(cause.getMessage());
                 }
             }
-            if (cancelled.get() && progress.getStatus() == TableStatus.RUNNING) {
+            // 已定稿为「已取消」的表不再改判为失败
+            if (cancelled.get()
+                    && (progress.getStatus() == TableStatus.RUNNING || progress.getStatus() == TableStatus.CANCELLED)) {
                 progress.setStatus(TableStatus.CANCELLED);
-                progress.setMessage("已取消");
+                if (progress.getMessage() == null || progress.getMessage().isEmpty()) {
+                    progress.setMessage("已取消");
+                }
             } else if (ok) {
                 progress.setStatus(TableStatus.SUCCESS);
                 if (progress.getMessage() == null || progress.getMessage().isEmpty()) {

@@ -5,12 +5,16 @@ import com.moral.model.ConnectionConfig;
 import com.moral.model.DbType;
 import com.moral.model.InferredType;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.BooleanSupplier;
+import java.util.function.LongConsumer;
 
 /**
  * PostgreSQL 方言：标识符小写、双引号引用、TRUNCATE、时间直接用 setTimestamp 绑定。
@@ -125,6 +129,13 @@ public class PgDialect implements Dialect {
         String nullToken = emptyAsNull ? "" : "\\N";
         return "COPY " + fullyQualified(schema, table) + " (" + columnPart + ") FROM STDIN WITH (FORMAT csv, HEADER "
                 + withHeader + ", NULL '" + nullToken + "')";
+    }
+
+    @Override
+    public long copyIn(Connection conn, String copySql, InputStream data,
+                       LongConsumer bytesConsumer, BooleanSupplier cancelled)
+            throws SQLException, IOException {
+        return PgCopyLoader.copyIn(conn, copySql, data, bytesConsumer, cancelled);
     }
 
     @Override

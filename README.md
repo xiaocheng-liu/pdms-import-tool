@@ -1,9 +1,9 @@
 # PDMS 数据导入工具
 
-跨平台（Windows / macOS / Linux）桌面工具：把某个文件夹下的 CSV 文件（每个 CSV 对应一张表）**并发导入**到 Oracle、PostgreSQL 或达梦数据库。
+跨平台（Windows / macOS / Linux）桌面工具：把某个文件夹下的 CSV 文件（每个 CSV 对应一张表）**并发导入**到 Oracle、PostgreSQL、达梦、人大金仓 KingbaseES 或 MySQL 数据库。
 
 核心能力：
-1. **选择数据库**：Oracle / PostgreSQL / 达梦，填写连接信息并可测试连接
+1. **选择数据库**：Oracle / PostgreSQL / 达梦 / 人大金仓 KingbaseES（PG 兼容模式）/ MySQL，填写连接信息并可测试连接
 2. **选择文件夹**：自动扫描目录下所有 `.csv`，表格化勾选要导入的表
 3. **并发导入**：多表并行 + 超过阈值的大表自动按字节分片并行写入
 
@@ -55,6 +55,8 @@ java -Dfile.encoding=UTF-8 -Xmx1g -jar target/pdms-import-tool.jar
    - Oracle：`jdbc:oracle:thin:@//host:port/服务名`；若使用 SID，服务名填写 `SID:实例名`
    - PostgreSQL：`jdbc:postgresql://host:port/库名`，自动附加 `currentSchema`
    - 达梦：`jdbc:dm://host:port/库名?schema=大写SCHEMA`
+   - 人大金仓 KingbaseES：`jdbc:kingbase8://host:port/库名?currentSchema=小写SCHEMA`，默认端口 54321（PG 兼容模式：表名/列名转小写 + 双引号）
+   - MySQL：`jdbc:mysql://host:port/库名?...`（自动附加 `allowLoadLocalInfile=true`、`rewriteBatchedStatements=true` 等参数），默认端口 3306；标识符转小写 + 反引号引用。MySQL 的库即 schema，**Schema 一栏留空**（界面选择 MySQL 时该栏会自动置灰）
 2. **数据源文件夹**：点击"选择文件夹"指定 CSV 目录，点"扫描 CSV"（默认已填入常见导出目录）
    - 只识别 `.csv` 文件，文件名即表名（如 `rule_dosage.csv` → 表 `RULE_DOSAGE`）
    - Oracle/达梦表名转大写，PostgreSQL 转小写
@@ -108,10 +110,29 @@ mvn -o package
 jpackage --type exe --name pdms-import-tool ^
   --input target --main-jar pdms-import-tool.jar ^
   --main-class com.moral.Launcher --java-options "-Dfile.encoding=UTF-8 -Xmx1g" ^
+  --icon icons\PDMS.ico ^
   --win-console
 ```
 
-仅生成绿色 exe（不生成安装包）可用 `--type app-image`。
+macOS 生成 dmg：
+
+```bash
+jpackage --type dmg --name pdms-import-tool \
+  --input target --main-jar pdms-import-tool.jar \
+  --main-class com.moral.Launcher --java-options "-Dfile.encoding=UTF-8 -Xmx1g" \
+  --icon icons/PDMS.icns
+```
+
+仅生成绿色 exe / app（不生成安装包）可用 `--type app-image`。
+
+**图标说明**：jar 内已内置 `icons/pdms-*.png`，直接 `java -jar` 时窗口标题栏、任务栏 / Dock 会自动显示 PDMS 图标，无需额外配置；
+上面的 `--icon` 仅用于 `jpackage` 生成本地安装包（exe / dmg）时设置文件图标。图标源文件在包内 `icons/` 目录：
+
+| 文件 | 用途 |
+| --- | --- |
+| `icons/pdms-16~1024.png` | 运行时窗口 / 任务栏图标，同时是打包素材 |
+| `icons/PDMS.icns` | macOS `.app` / dmg 图标 |
+| `icons/PDMS.ico` | Windows exe 图标 |
 
 ## 六、常见问题
 
@@ -123,7 +144,7 @@ jpackage --type exe --name pdms-import-tool ^
 | TRUNCATE 报外键错误 | 清表方式改为 DELETE，或先临时禁用外键约束 |
 | PG 报 `schema "xxx" does not exist` | 勾选"自动建表"后本工具会先 `CREATE SCHEMA IF NOT EXISTS`；若报权限不足，请让 DBA 授权或在库中先手工建好 schema |
 | 一张表准备失败后，后面所有表都报 `current transaction is aborted` | 已在准备阶段失败时回滚主控连接，不会再连坐；若仍遇到请确认使用的是最新 jar |
-| 极速模式有什么限制 | PostgreSQL 用 COPY，需对目标表有 INSERT 权限（不需要超级用户，因为走 STDIN 而非服务端文件）；Oracle/达梦用直接路径插入，期间该表被加排它锁、会降为单分片。若表上有触发器、或导入期间还有别的会话在写同一张表，请关闭极速模式。失败时日志会出现 `[降级]` 提示并自动改回标准模式 |
+| 极速模式有什么限制 | PostgreSQL / 人大金仓用 COPY（金仓走驱动自带 CopyManager）；MySQL 用 LOAD DATA LOCAL INFILE，需对目标表有 INSERT 权限（不需要超级用户，因为走 STDIN 而非服务端文件）；Oracle/达梦用直接路径插入，期间该表被加排它锁、会降为单分片。若表上有触发器、或导入期间还有别的会话在写同一张表，请关闭极速模式。失败时日志会出现 `[降级]` 提示并自动改回标准模式 |
 | 导入很慢 / 进度长时间不动 | 表格的"成功行/失败行"是**实时更新**的（每 2000 行刷新），先看是否在推进；若 10 秒以上无进展，日志区会自动输出**看门狗**信息：`[等待] 表名：正在等待数据库写入/提交，已 40 秒无进展；已成功 N 行，批次 X 次，最近一批 Z ms`。提示"等待数据库写入/提交"→ 瓶颈在库端（锁等待、触发器、大量索引、redo/磁盘）；提示"正在读取 CSV"→ 瓶颈在客户端/网络。每张表结束还会打印 `[统计] 批次 X 次，执行累计 A ms，提交累计 B ms`。点「停止」会立即中断挂起的数据库操作 |
 | 一直卡在"提交中"不动 | 看门狗提示"正在等待数据库写入/提交"说明瓶颈在库端（锁等待、触发器、大量索引、redo/磁盘）。现在工具会在单批超过「写入超时秒数」（默认 120 秒）后自动取消该批次：极速模式自动降级为标准写入，标准模式标记失败并写明"写入超时/被中断"。想给慢库更多时间可调大该值；填 0 关闭自动中断（仍保留 10 分钟连接层网络超时兜底） |
 | 导入速度还能怎么提 | ① 勾选极速模式；② 调大并发线程数与批量提交行数；③ 临时把索引/约束置为不可用、导入后重建；④ 确认目标库 redo/归档与磁盘 IO 不是瓶颈 |
@@ -137,14 +158,16 @@ jpackage --type exe --name pdms-import-tool ^
 pdms-import-tool/
 ├── pom.xml                  # 依赖与 shade 打包配置（编译目标 Java 11）
 ├── run.sh / run.bat         # 启动脚本
+├── jdk-path.txt             # JDK 路径配置模板（实施现场可填）
+├── icons/                   # 应用图标（pdms-16~1024.png / PDMS.icns / PDMS.ico）
 └── src/main/java/com/moral/
-    ├── Launcher.java        # 入口
+    ├── Launcher.java        # 入口（启动时应用图标）
     ├── model/               # 配置、选项、进度、结果等模型
-    ├── db/                  # 方言与连接工厂（Oracle / PG / 达梦）
+    ├── db/                  # 方言与连接工厂（Oracle / PG / 达梦 / 人大金仓 / MySQL）
     ├── csv/                 # 表头采样、流式读取、分片规划、类型推断、建表语句
     ├── task/                # 导入引擎、分片任务、批处理写入、失败记录
     ├── ui/                  # Swing 界面（FlatLaf 深色仪表盘）
-    └── util/                # 配置持久化、跨平台适配、格式化、EDT 工具
+    └── util/                # 配置持久化、跨平台适配、图标加载、格式化、EDT 工具
 ```
 
 配置文件保存在用户主目录 `~/.pdms-import-tool/config.properties`（连接信息、导入选项、上次目录），密码以明文保存，仅适合本机自用场景。

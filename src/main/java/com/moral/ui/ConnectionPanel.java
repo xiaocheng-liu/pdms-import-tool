@@ -104,6 +104,15 @@ public class ConnectionPanel extends JPanel {
         if (currentPort.isEmpty() || isDefaultPort(currentPort)) {
             portField.setText(String.valueOf(type.getDefaultPort()));
         }
+        // MySQL 没有独立 schema 概念：库名即 schema，Schema 一栏不参与连接与建表
+        boolean mysql = type == DbType.MYSQL;
+        schemaField.setEnabled(!mysql);
+        schemaField.setToolTipText(mysql
+                ? "MySQL 的库就是 schema，无需填写；写入位置由「数据库名」决定"
+                : null);
+        if (mysql) {
+            schemaField.setText("");
+        }
     }
 
     private boolean isDefaultPort(String port) {

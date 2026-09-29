@@ -107,8 +107,11 @@ public class TableProgress {
 
     /** 0~100 的百分比 */
     public int getPercent() {
+        if (status == TableStatus.SUCCESS) {
+            return 100;
+        }
         if (bytesTotal <= 0) {
-            return status == TableStatus.SUCCESS ? 100 : 0;
+            return 0;
         }
         long percent = bytesDone * 100L / bytesTotal;
         return (int) Math.max(0, Math.min(100, percent));

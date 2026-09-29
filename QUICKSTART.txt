@@ -6,7 +6,7 @@ PDMS 数据导入工具 1.0 —— 实施部署与使用说明（快速版）
      验证：命令行执行 java -version，能显示版本号即正常
      未安装时请先安装 JDK，或设置环境变量 JAVA_HOME 指向 JDK 目录
      机器上没有 JAVA_HOME、PATH 里也没有 java 时，可在本目录 jdk-path.txt 中填写 JDK 安装目录
-  2. 机器需能通过网络访问目标数据库（Oracle / PostgreSQL / 达梦）
+  2. 机器需能通过网络访问目标数据库（Oracle / PostgreSQL / 达梦 / 人大金仓 KingbaseES / MySQL）
   3. 无需安装 Maven、无需联网（三种数据库驱动已打进 jar 内）
 
 二、启动
@@ -23,10 +23,12 @@ PDMS 数据导入工具 1.0 —— 实施部署与使用说明（快速版）
   都没指定时才回退到 JAVA_HOME / PATH 里的 java
 
 三、使用步骤
-  1. 数据库连接：选择类型（Oracle / PostgreSQL / 达梦），填写主机、端口、
-     服务名（或库名）、用户名、密码、Schema（默认 KBE），点“测试连接”
+  1. 数据库连接：选择类型（Oracle / PostgreSQL / 达梦 / 人大金仓 KingbaseES），
+     填写主机、端口、服务名（或库名）、用户名、密码、Schema（默认 KBE），点“测试连接”
      - Oracle：填服务名；若使用 SID，服务名处填 SID:实例名
-     - PostgreSQL / 达梦：填数据库名
+     - PostgreSQL / 达梦 / 人大金仓：填数据库名
+     - 人大金仓默认端口 54321，按 PG 兼容模式处理（表名/列名转小写）
+     - MySQL 默认端口 3306，表名/列名转小写；库即 schema，Schema 一栏留空（已置灰）
   2. 数据源文件夹：点“选择文件夹”选中 CSV 所在目录（如 E:\oracleToCSV\kbe），
      再点“扫描 CSV”。文件名即表名（rule_dosage.csv → 表 RULE_DOSAGE）
   3. 在表清单中勾选要导入的表（默认全选，可全选/反选，支持按大小排序）
@@ -92,13 +94,26 @@ PDMS 数据导入工具 1.0 —— 实施部署与使用说明（快速版）
   5) 提示文件被占用 → 关闭 Excel 等正在打开该 CSV 的程序
   6) 窗口显示不全 → 最大化窗口，或拖动中间分割条调整上下区域
   7) 极速模式日志出现“[降级]” → 正常兜底：该表改回标准 INSERT 写入，数据不会丢
-  8) PG 提示 schema “xxx” 不存在 → 勾选“自动建表”后会自动 CREATE SCHEMA IF NOT EXISTS；
+  8) PG / 金仓提示 schema “xxx” 不存在 → 勾选“自动建表”后会自动 CREATE SCHEMA IF NOT EXISTS；
      若提示权限不足，请让 DBA 授权或在库中先手工建好 schema
+  9) 金仓连接报找不到驱动 / 连不上 → 本包 jar 已内置 kingbase8 9.0.0 驱动；确认端口为
+     54321、库名正确，且机器能访问数据库监听端口
+ 10) 金仓极速模式日志出现“[降级]” → 服务端不支持 COPY 写法时自动改标准 INSERT 写入，
+     数据不会丢；想提速可先确认目标表无触发器、无大量索引
+ 11) MySQL 极速模式日志出现“[降级]” → 服务端未开启 local_infile（默认 OFF）：
+     让 DBA 执行 SET GLOBAL local_infile=1，或改用标准模式（已靠 rewriteBatchedStatements 提速）
+ 12) MySQL 提示表不存在/库不存在 → 工具不会自动建库，请先让 DBA 建好库并授权，
+     再勾选“自动建表”由工具建表
 
 八、包内文件
-  pdms-import-tool.jar   主程序（已内含 Oracle / PostgreSQL / 达梦 驱动）
+  pdms-import-tool.jar   主程序（已内含 Oracle / PostgreSQL / 达梦 / 人大金仓 / MySQL 驱动，
+                         并内置 PDMS 应用图标，启动后窗口标题栏 / 任务栏即显示该图标）
   run.bat                Windows 启动脚本
   run.sh                 macOS / Linux 启动脚本
   jdk-path.txt           JDK 路径配置文件（可选；没配 JAVA_HOME 时把 JDK 目录填在这里）
-  README.md              完整功能说明（含参数细节、原理与打包成 exe 的方法）
+  README.md              完整功能说明（含参数细节、原理与打包成 exe / dmg 的方法）
   QUICKSTART.txt         本文件
+  icons/                 应用图标素材
+      pdms-16~1024.png   运行时窗口 / 任务栏图标（jar 内已内置一份）
+      PDMS.icns          macOS .app / dmg 打包用图标
+      PDMS.ico           Windows exe 打包用图标
