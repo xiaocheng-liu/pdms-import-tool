@@ -16,6 +16,8 @@ public final class DialectFactory {
         DIALECTS.put(DbType.ORACLE, new OracleDialect());
         DIALECTS.put(DbType.POSTGRESQL, new PgDialect());
         DIALECTS.put(DbType.DAMENG, new DamengDialect());
+        DIALECTS.put(DbType.KINGBASE, new KingbaseDialect());
+        DIALECTS.put(DbType.MYSQL, new MySQLDialect());
     }
 
     private DialectFactory() {

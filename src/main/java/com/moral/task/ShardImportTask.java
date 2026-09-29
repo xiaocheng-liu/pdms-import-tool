@@ -6,7 +6,6 @@ import com.moral.csv.CsvMetaReader;
 import com.moral.csv.CsvRowReader;
 import com.moral.db.ConnectionFactory;
 import com.moral.db.Dialect;
-import com.moral.db.PgCopyLoader;
 import com.moral.model.ConnectionConfig;
 import com.moral.model.CsvTable;
 import com.moral.model.ImportOptions;
@@ -34,7 +33,8 @@ import java.util.function.Consumer;
  *
  * <p>极速模式（可选）：
  * <ul>
- *   <li>PostgreSQL：走 COPY FROM STDIN，由服务端直接解析 CSV，速度可提升数倍；</li>
+ *   <li>PostgreSQL / 人大金仓：走 COPY FROM STDIN，由服务端直接解析 CSV，速度可提升数倍；</li>
+ *   <li>MySQL：走 LOAD DATA LOCAL INFILE，同样由服务端解析；</li>
  *   <li>Oracle/达梦：走 {@code INSERT /*+ APPEND *}{@code /} 直接路径插入（单分片）；</li>
  *   <li>两者失败时都会自动回滚并降级为标准 INSERT 批量写入，保证不丢数据。</li>
  * </ul>
@@ -63,6 +63,8 @@ public class ShardImportTask implements Callable<Boolean> {
 
     /** 当前正在写入的 writer，用于"停止"时中断挂起的数据库操作 */
     private volatile BatchingWriter activeWriter;
+    /** 批量加载通道（LOAD DATA）执行中的 Statement，用于超时时主动取消 */
+    private volatile Statement activeStreamStatement;
     /** 已同步到进度对象的成功/失败行数基线（保证运行中也能看到实时行数） */
     private long syncedSuccessRows;
     private long syncedFailedRows;
@@ -146,6 +148,7 @@ public class ShardImportTask implements Callable<Boolean> {
         } finally {
             finished = true;
             activeWriter = null;
+            activeStreamStatement = null;
             if (watchdog != null) {
                 watchdog.interrupt();
             }
@@ -189,7 +192,7 @@ public class ShardImportTask implements Callable<Boolean> {
         StringBuilder message = new StringBuilder();
         message.append("[等待] ").append(tableLabel).append("：");
         if (writer == null) {
-            message.append("正在通过批量加载通道(COPY)写入数据库");
+            message.append("正在通过批量加载通道(COPY / LOAD DATA)写入数据库");
         } else if (writer.isFlushing()) {
             message.append("正在等待数据库写入/提交");
         } else {
@@ -215,7 +218,28 @@ public class ShardImportTask implements Callable<Boolean> {
      * 从而让极速模式走降级路径、标准模式快速标记失败，而不是一直挂在"提交中"。
      */
     private void maybeCancelStalledBatch(BatchingWriter writer) {
-        if (writeTimeoutMillis <= 0 || writer == null || !writer.isFlushing()) {
+        if (writeTimeoutMillis <= 0) {
+            return;
+        }
+        if (writer == null) {
+            // 批量加载通道（COPY / LOAD DATA）：没有 BatchingWriter，按最近一次进展时间判断
+            Statement streamStatement = activeStreamStatement;
+            if (streamStatement == null || System.currentTimeMillis() - lastActivityAt < writeTimeoutMillis) {
+                return;
+            }
+            if (!autoCancelled.compareAndSet(false, true)) {
+                return;
+            }
+            log("[中断] " + tableLabel + "：批量加载已 " + (writeTimeoutMillis / 1000)
+                    + " 秒无响应，已自动取消；该表改用标准写入重试");
+            try {
+                streamStatement.cancel();
+            } catch (SQLException ignore) {
+                // 语句已结束或驱动不支持取消，忽略
+            }
+            return;
+        }
+        if (!writer.isFlushing()) {
             return;
         }
         long startedAt = writer.getBatchStartedAt();
@@ -248,6 +272,11 @@ public class ShardImportTask implements Callable<Boolean> {
         if (copySql != null) {
             return copyLoad(conn, copySql);
         }
+        String loadSql = dialect.buildLoadDataSql(config.getSchema(), tableName, meta.getColumns(),
+                options.isEmptyAsNull(), range.getIndex() == 0);
+        if (loadSql != null) {
+            return loadDataLoad(conn, loadSql);
+        }
         return fastPathInsert(conn);
     }
 
@@ -255,7 +284,7 @@ public class ShardImportTask implements Callable<Boolean> {
     private Boolean copyLoad(Connection conn, String copySql) throws SQLException, IOException {
         long written;
         try (InputStream data = CsvRowReader.openRaw(table.getFile(), range.getStart(), range.getEnd())) {
-            written = PgCopyLoader.copyIn(conn, copySql, data,
+            written = dialect.copyIn(conn, copySql, data,
                     bytes -> {
                         progress.addBytes(bytes);
                         lastActivityAt = System.currentTimeMillis();
@@ -268,6 +297,44 @@ public class ShardImportTask implements Callable<Boolean> {
             }
             log("[降级] " + tableLabel + "：极速模式(COPY)失败，改用标准模式重试：" + brief(error.getMessage()));
             return null;
+        }
+        if (cancelled.get()) {
+            rollback(conn);
+            return false;
+        }
+        conn.commit();
+        progress.addRows(written);
+        progress.addSuccess(written);
+        return true;
+    }
+
+    /** MySQL：LOAD DATA LOCAL INFILE */
+    private Boolean loadDataLoad(Connection conn, String loadSql) throws SQLException, IOException {
+        long written;
+        try (InputStream data = CsvRowReader.openRaw(table.getFile(), range.getStart(), range.getEnd())) {
+            written = dialect.loadLocalInfile(conn, loadSql, data,
+                    bytes -> {
+                        progress.addBytes(bytes);
+                        lastActivityAt = System.currentTimeMillis();
+                    },
+                    cancelled::get,
+                    statement -> activeStreamStatement = statement);
+        } catch (SQLException error) {
+            rollback(conn);
+            if (cancelled.get()) {
+                return false;
+            }
+            log("[降级] " + tableLabel + "：极速模式(LOAD DATA)失败，改用标准模式重试：" + brief(error.getMessage()));
+            return null;
+        } catch (IOException error) {
+            // 取消时包装流会主动抛出，走回滚并返回"未完成"
+            rollback(conn);
+            if (cancelled.get()) {
+                return false;
+            }
+            throw error;
+        } finally {
+            activeStreamStatement = null;
         }
         if (cancelled.get()) {
             rollback(conn);

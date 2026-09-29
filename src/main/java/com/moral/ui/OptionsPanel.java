@@ -103,7 +103,7 @@ public class OptionsPanel extends JPanel {
         writeTimeoutSpinner.setToolTipText("<html>单个批次执行/提交超过该秒数仍无进展时，自动取消当前批次<br>"
                 + "极速模式下会自动降级为标准写入；标准模式下该表标记失败<br>"
                 + "填 0 表示关闭自动中断（仍保留连接层网络超时兜底）</html>");
-        fastModeCheck.setToolTipText("<html>极速模式：PostgreSQL 走 COPY 批量加载，Oracle/达梦走 APPEND 直接路径插入（单分片）<br>"
+        fastModeCheck.setToolTipText("<html>极速模式：PostgreSQL / 人大金仓走 COPY 批量加载，MySQL 走 LOAD DATA LOCAL INFILE，Oracle/达梦走 APPEND 直接路径插入（单分片）<br>"
                 + "失败会自动降级为标准 INSERT，数据不会丢；降级时失败行定位能力略有下降</html>");
         autoCreateCheck.setToolTipText("表在目标库中不存在时，按 CSV 采样推断类型生成建表语句（执行前可预览编辑）");
     }

@@ -5,10 +5,16 @@ import com.moral.model.ConnectionConfig;
 import com.moral.model.DbType;
 import com.moral.model.InferredType;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
+import java.util.function.LongConsumer;
 
 /**
  * 数据库方言：URL、驱动、标识符大小写与引用、清表语句、类型映射、绑定表达式。
@@ -103,5 +109,48 @@ public interface Dialect {
     default String buildCopyInSql(String schema, String table, List<String> columns,
                                   boolean emptyAsNull, boolean withHeader) {
         return null;
+    }
+
+    /**
+     * 执行 COPY 批量加载（PostgreSQL / 人大金仓）。
+     * 仅在 {@link #buildCopyInSql} 返回非 null 时才会被调用，其它方言走默认实现（直接报错）。
+     *
+     * @param data          CSV 字节流（UTF-8）
+     * @param bytesConsumer 已写入字节数回调，用于进度展示
+     * @param cancelled     取消判断
+     * @return 成功加载的行数；被取消时返回 0
+     */
+    default long copyIn(Connection conn, String copySql, InputStream data,
+                        LongConsumer bytesConsumer, BooleanSupplier cancelled)
+            throws SQLException, IOException {
+        throw new UnsupportedOperationException("当前方言不支持 COPY 批量加载：" + type());
+    }
+
+    /**
+     * 生成 MySQL LOAD DATA LOCAL INFILE 语句；返回 null 表示该方言不使用该通道。
+     *
+     * @param emptyAsNull 空字段是否作为 NULL
+     * @param withHeader  数据流首行是否为表头（需要跳过）
+     */
+    default String buildLoadDataSql(String schema, String table, List<String> columns,
+                                    boolean emptyAsNull, boolean withHeader) {
+        return null;
+    }
+
+    /**
+     * 执行 LOAD DATA LOCAL INFILE（MySQL）。
+     * 仅在 {@link #buildLoadDataSql} 返回非 null 时才会被调用，其它方言走默认实现（直接报错）。
+     *
+     * @param data          CSV 字节流（UTF-8）
+     * @param bytesConsumer 已读取字节数回调，用于进度展示
+     * @param cancelled     取消判断
+     * @param statementHook 把执行中的 Statement 交给调用方，便于超时时主动 cancel
+     * @return 成功加载的行数；被取消时返回 0
+     */
+    default long loadLocalInfile(Connection conn, String sql, InputStream data,
+                                 LongConsumer bytesConsumer, BooleanSupplier cancelled,
+                                 Consumer<Statement> statementHook)
+            throws SQLException, IOException {
+        throw new UnsupportedOperationException("当前方言不支持 LOAD DATA 批量加载：" + type());
     }
 }

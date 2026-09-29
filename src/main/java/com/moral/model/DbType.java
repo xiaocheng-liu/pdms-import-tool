@@ -6,7 +6,9 @@ package com.moral.model;
 public enum DbType {
     ORACLE("Oracle", 1521, "oracle.jdbc.OracleDriver", "服务名/SID"),
     POSTGRESQL("PostgreSQL", 5432, "org.postgresql.Driver", "数据库名"),
-    DAMENG("达梦 DM", 5236, "dm.jdbc.driver.DmDriver", "数据库名");
+    DAMENG("达梦 DM", 5236, "dm.jdbc.driver.DmDriver", "数据库名"),
+    KINGBASE("人大金仓 KingbaseES", 54321, "com.kingbase8.Driver", "数据库名"),
+    MYSQL("MySQL", 3306, "com.mysql.cj.jdbc.Driver", "数据库名");
 
     private final String displayName;
     private final int defaultPort;

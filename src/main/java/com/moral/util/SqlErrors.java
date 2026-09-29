@@ -18,6 +18,8 @@ public final class SqlErrors {
     private static final String JDBC_CANCEL_STATE = "HY008";
     /** Oracle ORA-01013：user requested cancel of current operation（cancel 与 query timeout 均抛此码） */
     private static final int ORACLE_CANCEL_CODE = 1013;
+    /** MySQL ER_QUERY_INTERRUPTED：Query execution was interrupted（cancel / KILL QUERY） */
+    private static final int MYSQL_CANCEL_CODE = 3024;
 
     private SqlErrors() {
     }
@@ -31,7 +33,7 @@ public final class SqlErrors {
         if (PG_CANCEL_STATE.equals(state) || JDBC_CANCEL_STATE.equals(state)) {
             return true;
         }
-        if (error.getErrorCode() == ORACLE_CANCEL_CODE) {
+        if (error.getErrorCode() == ORACLE_CANCEL_CODE || error.getErrorCode() == MYSQL_CANCEL_CODE) {
             return true;
         }
         String message = error.getMessage();
@@ -42,6 +44,7 @@ public final class SqlErrors {
         return lower.contains("cancel")
                 || lower.contains("timeout")
                 || lower.contains("timed out")
+                || lower.contains("interrupted")
                 || message.contains("取消")
                 || message.contains("超时");
     }

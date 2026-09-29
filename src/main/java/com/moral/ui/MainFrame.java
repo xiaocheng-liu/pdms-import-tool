@@ -195,7 +195,7 @@ public class MainFrame extends JFrame {
         JPanel header = new JPanel(new BorderLayout(8, 4));
         JLabel title = new JLabel("PDMS 数据导入工具");
         title.setFont(title.getFont().deriveFont(Font.BOLD, 20f));
-        JLabel subtitle = new JLabel("Oracle / PostgreSQL / 达梦 · CSV 文件夹批量并发导入");
+        JLabel subtitle = new JLabel("Oracle / PostgreSQL / 达梦 / 人大金仓 / MySQL · CSV 文件夹批量并发导入");
         subtitle.setFont(subtitle.getFont().deriveFont(Font.PLAIN, 12f));
 
         JPanel textPanel = new JPanel();
@@ -519,6 +519,7 @@ public class MainFrame extends JFrame {
         long rowsWritten = 0;
         long rowsFailed = 0;
         int finished = 0;
+        int failed = 0;
         int totalTables = 0;
         for (CsvTable table : tableListPanel.getTables()) {
             if (!table.isSelected()) {
@@ -530,10 +531,19 @@ public class MainFrame extends JFrame {
             done += progress.getBytesDone();
             rowsWritten += progress.getSuccessRows();
             rowsFailed += progress.getFailedRows();
-            if (progress.getStatus() != TableStatus.PENDING && progress.getStatus() != TableStatus.RUNNING) {
+            TableStatus status = progress.getStatus();
+            if (status != TableStatus.PENDING && status != TableStatus.RUNNING) {
                 finished++;
             }
+            if (status == TableStatus.FAILED || status == TableStatus.CANCELLED) {
+                failed++;
+            }
         }
+
+        // 全部表已结束且没有失败/取消时，字节统计上的微小缺口（header、CRLF 归一、尾块未 flush 等）
+        // 不应让总进度卡在 99.XX%，统一显示为 100%。
+        boolean forceComplete = total > 0 && finished == totalTables && failed == 0;
+        long displayDone = forceComplete ? total : done;
 
         long now = System.currentTimeMillis();
         if (lastProgressAt > 0 && now > lastProgressAt) {
@@ -545,24 +555,26 @@ public class MainFrame extends JFrame {
         lastProgressAt = now;
         lastProgressBytes = done;
 
-        String percentText = total <= 0 ? "0.00%" : String.format("%.2f%%", done * 100.0 / total);
-        totalProgress.setValue(total <= 0 ? 0 : (int) (done * 100L / total));
+        String percentText = total <= 0 ? "0.00%" : String.format("%.2f%%", displayDone * 100.0 / total);
+        totalProgress.setValue(total <= 0 ? 0 : (int) (displayDone * 100L / total));
         totalProgress.setString(percentText);
 
         String etaText;
-        if (total > 0 && done >= total) {
+        if (forceComplete) {
+            etaText = "导入完成";
+        } else if (total > 0 && displayDone >= total) {
             etaText = "等待收尾提交";
         } else if (!running) {
             etaText = "—";
         } else if (smoothRateBytesPerMs <= 0.0005) {
             etaText = "数据暂无推进，等待数据库写入响应（详见日志批次耗时）";
         } else {
-            long remainMs = (long) ((total - done) / smoothRateBytesPerMs);
+            long remainMs = (long) ((total - displayDone) / smoothRateBytesPerMs);
             etaText = "预计剩余 " + FileSizeUtil.formatDuration(remainMs);
         }
 
         totalLabel.setText("已完成 " + finished + "/" + totalTables + " 张表　已读 "
-                + FileSizeUtil.formatSize(done) + " / " + FileSizeUtil.formatSize(total)
+                + FileSizeUtil.formatSize(displayDone) + " / " + FileSizeUtil.formatSize(total)
                 + "　写入 " + FileSizeUtil.formatNumber(rowsWritten) + " 行"
                 + (rowsFailed > 0 ? "（失败 " + FileSizeUtil.formatNumber(rowsFailed) + "）" : "")
                 + "　" + etaText);

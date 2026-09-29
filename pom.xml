@@ -19,6 +19,8 @@
         <ojdbc.version>21.13.0.0</ojdbc.version>
         <postgresql.version>42.7.8</postgresql.version>
         <dm.version>8.1.3.140</dm.version>
+        <kingbase.version>9.0.0</kingbase.version>
+        <mysql.version>8.0.30</mysql.version>
         <main.class>com.moral.Launcher</main.class>
     </properties>
 
@@ -56,6 +58,20 @@
             <groupId>com.dameng</groupId>
             <artifactId>DmJdbcDriver18</artifactId>
             <version>${dm.version}</version>
+        </dependency>
+
+        <!-- 人大金仓 KingbaseES 驱动（本地仓库已有，随 fat jar 发布） -->
+        <dependency>
+            <groupId>com.kingbase8</groupId>
+            <artifactId>kingbase8</artifactId>
+            <version>${kingbase.version}</version>
+        </dependency>
+
+        <!-- MySQL 驱动（本地仓库已有，随 fat jar 发布） -->
+        <dependency>
+            <groupId>mysql</groupId>
+            <artifactId>mysql-connector-java</artifactId>
+            <version>${mysql.version}</version>
         </dependency>
     </dependencies>
 
