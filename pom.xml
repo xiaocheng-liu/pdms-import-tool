@@ -10,8 +10,8 @@
     <packaging>jar</packaging>
 
     <properties>
-        <!-- 编译目标 Java 11：本机 JDK21 编译，Windows 上 JDK11/17/21 均可运行 -->
-        <maven.compiler.release>11</maven.compiler.release>
+        <!-- 编译目标 Java 21：运行环境最低要求 JDK 21 -->
+        <maven.compiler.release>21</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <commons-csv.version>1.11.0</commons-csv.version>
