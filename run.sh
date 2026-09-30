@@ -4,7 +4,7 @@
 #
 #  用法：
 #    ./run.sh                      自动查找 JDK
-#    ./run.sh /opt/jdk-17          指定 JDK 安装目录
+#    ./run.sh /opt/jdk-21          指定 JDK 安装目录
 #    ./run.sh --jdk /opt/jdk-17    同上
 #    ./run.sh --help               查看帮助
 #
@@ -12,7 +12,7 @@
 #    命令行参数 > 环境变量 PDMS_JAVA_HOME > 同目录 jdk-path.txt > JAVA_HOME > PATH 中的 java
 #  前三种为"显式指定"，路径无效时直接报错退出，不会悄悄改用其它版本。
 #
-#  要求：JDK 11 及以上
+#  要求：JDK 21 及以上（最低 21）
 # ============================================================
 
 set -e
@@ -100,7 +100,7 @@ elif command -v java >/dev/null 2>&1; then
   JAVA_CMD="java"
   echo "[信息] 使用 PATH 中的 java：$(command -v java)"
 else
-  echo "[错误] 未检测到 Java 运行环境，请安装 JDK 11 及以上版本"
+  echo "[错误] 未检测到 Java 运行环境，请安装 JDK 21 及以上版本"
   echo "       也可在 $APP_DIR/jdk-path.txt 中填写 JDK 安装目录，或用 $0 <JDK目录> 指定"
   exit 1
 fi

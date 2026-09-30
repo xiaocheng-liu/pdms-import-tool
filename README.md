@@ -11,42 +11,32 @@
 
 ## 一、运行环境
 
-- JDK 11 / 17 / 21（推荐 17 及以上），无需安装其它软件
+- JDK 21 及以上（**最低 21**，低于 21 会拒绝启动），无需安装其它软件
 - 目标数据库需能通过网络访问
 
 ## 二、启动方式
 
 ### Windows
 
-1. 安装 JDK 11+（建议设置环境变量 `JAVA_HOME`）
-2. 双击 `run.bat`（脚本按优先级自动检测 JDK：`jdk-path.txt` / `JAVA_HOME` / PATH 中的 `java`；找不到 jar 时自动执行 `mvn -o package`）
-3. 若未安装 Maven，请先在有 Maven 的环境执行 `mvn -o package`，再把整个目录拷贝到 Windows 机器上运行
+1. 安装 JDK 21 及以上（建议设置环境变量 `JAVA_HOME`，并把 `%JAVA_HOME%\bin` 加入 `PATH`）
+2. 双击 `run.bat`：直接用 PATH 中的 `java` 启动，启动前会校验版本，低于 21 时提示并退出
+
+Windows 端 `run.bat` 不再做 JDK 查找，也不读取 `jdk-path.txt`；机器上装了多个 JDK 时，请把 JDK 21 的 `bin` 目录放到 `PATH` 最前面。
 
 ### macOS / Linux
 
 ```bash
-./run.sh                # 自动查找 JDK
-./run.sh /opt/jdk-17    # 指定 JDK 安装目录
+./run.sh                # 自动查找 JDK（要求 21 及以上）
+./run.sh /opt/jdk-21    # 指定 JDK 安装目录
 ```
 
-### 指定 JDK 路径（可选，实施现场常用）
-
-现场机器没配 `JAVA_HOME`、PATH 里没有 `java`，或需要用指定版本 JDK 时，任选一种方式：
-
-| 方式 | 用法 |
-| --- | --- |
-| 配置文件（推荐，包内已带模板） | 编辑 `jdk-path.txt`，写一行 JDK 安装目录，如 `C:\Program Files\Java\jdk-17` 或 `/opt/jdk-17.0.9` |
-| 命令行参数 | `run.bat "C:\Program Files\Java\jdk-17"`；`./run.sh /opt/jdk-17`（也支持 `--jdk <目录>`） |
-| 环境变量 | 设置 `PDMS_JAVA_HOME` 指向 JDK 目录 |
-
-查找优先级：命令行参数 > `PDMS_JAVA_HOME` > `jdk-path.txt` > `JAVA_HOME` > PATH 中的 `java`。
-前三种属于显式指定，路径无效（目录下没有 `bin/java`）时直接报错退出，不会悄悄改用其它版本。
+`run.sh` 仍按优先级查找 JDK：命令行参数 > `PDMS_JAVA_HOME` > `jdk-path.txt` > `JAVA_HOME` > PATH 中的 `java`。
 
 ### 手动运行
 
 ```bash
 mvn -o package
-java -Dfile.encoding=UTF-8 -Xmx1g -jar target/pdms-import-tool.jar
+java -Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8 -Xmx1g -jar target/pdms-import-tool.jar
 ```
 
 ## 三、使用步骤
@@ -103,7 +93,7 @@ java -Dfile.encoding=UTF-8 -Xmx1g -jar target/pdms-import-tool.jar
 
 ## 五、Windows 打包为 exe（可选）
 
-在有 JDK 17+ 的 Windows 机器上，可用 `jpackage` 生成本地安装包（需先安装 [WiX 3.x](https://wixtoolset.org/) 才能生成 msi）：
+在有 JDK 21+ 的 Windows 机器上，可用 `jpackage` 生成本地安装包（需先安装 [WiX 3.x](https://wixtoolset.org/) 才能生成 msi）：
 
 ```bat
 mvn -o package
@@ -156,9 +146,9 @@ jpackage --type dmg --name pdms-import-tool \
 
 ```
 pdms-import-tool/
-├── pom.xml                  # 依赖与 shade 打包配置（编译目标 Java 11）
-├── run.sh / run.bat         # 启动脚本
-├── jdk-path.txt             # JDK 路径配置模板（实施现场可填）
+├── pom.xml                  # 依赖与 shade 打包配置（编译目标 Java 21）
+├── run.sh / run.bat         # 启动脚本（Windows 端直接用 PATH 中的 java）
+├── jdk-path.txt             # JDK 路径配置模板（仅 run.sh 读取）
 ├── icons/                   # 应用图标（pdms-16~1024.png / PDMS.icns / PDMS.ico）
 └── src/main/java/com/moral/
     ├── Launcher.java        # 入口（启动时应用图标）

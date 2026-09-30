@@ -2,25 +2,23 @@ PDMS 数据导入工具 1.0 —— 实施部署与使用说明（快速版）
 ========================================================================
 
 一、运行环境
-  1. 目标机器需安装 JDK 11 或更高版本（推荐 17 / 21）
-     验证：命令行执行 java -version，能显示版本号即正常
-     未安装时请先安装 JDK，或设置环境变量 JAVA_HOME 指向 JDK 目录
-     机器上没有 JAVA_HOME、PATH 里也没有 java 时，可在本目录 jdk-path.txt 中填写 JDK 安装目录
+  1. 目标机器需安装 JDK 21 或更高版本（最低 21；低于 21 的 JDK 会被拒绝启动）
+     验证：命令行执行 java -version，显示 21 及以上即正常
+     未安装时请先安装 JDK 21，并确保 java 已加入 PATH（可设置 JAVA_HOME 并把
+     %JAVA_HOME%\bin 加入 PATH）
   2. 机器需能通过网络访问目标数据库（Oracle / PostgreSQL / 达梦 / 人大金仓 KingbaseES / MySQL）
   3. 无需安装 Maven、无需联网（三种数据库驱动已打进 jar 内）
 
 二、启动
   Windows   ：双击 run.bat（会弹出一个命令行窗口，导入过程中请勿关闭）
-             指定 JDK：run.bat "C:\Program Files\Java\jdk-17"
-  macOS/Linux：终端执行 ./run.sh；指定 JDK：./run.sh /opt/jdk-17
-  手动启动  ：java -Dfile.encoding=UTF-8 -Xmx1g -jar pdms-import-tool.jar
+             直接用 PATH 中的 java 启动；Java 版本低于 21 时会提示并退出
+  macOS/Linux：终端执行 ./run.sh；指定 JDK：./run.sh /opt/jdk-21
+  手动启动  ：java -Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8 -Xmx1g -jar pdms-import-tool.jar
 
-  指定 JDK 的三类方式（优先级从高到低）：
-     1) 命令行参数：run.bat <JDK目录>    /   ./run.sh <JDK目录>
-     2) 环境变量  ：PDMS_JAVA_HOME=<JDK目录>
-     3) 配置文件  ：编辑本目录 jdk-path.txt，写一行 JDK 安装目录（推荐给实施人员）
-  前三种为显式指定，路径无效（目录下没有 bin/java）时直接报错；
-  都没指定时才回退到 JAVA_HOME / PATH 里的 java
+  Windows 端 run.bat 不做 JDK 查找，直接使用 PATH 中的 java：
+     - 装多个 JDK 时，请把 PATH 调整到 JDK 21 的 bin 目录在最前面
+     - macOS / Linux 的 run.sh 仍支持按 命令行参数 > PDMS_JAVA_HOME > jdk-path.txt
+       > JAVA_HOME > PATH 的顺序指定 JDK
 
 三、使用步骤
   1. 数据库连接：选择类型（Oracle / PostgreSQL / 达梦 / 人大金仓 KingbaseES），
@@ -86,8 +84,8 @@ PDMS 数据导入工具 1.0 —— 实施部署与使用说明（快速版）
             并发写同一张大表若变慢，可把“单表最大分片数”调小（如 2）减少索引/ITL 争用
 
 七、常见问题
-  1) 双击 run.bat 窗口一闪而过 → 没找到 Java：安装 JDK 11+，或在本目录 jdk-path.txt 中
-     填写 JDK 安装目录，或用 run.bat <JDK目录> 指定
+  1) 双击 run.bat 提示“未检测到 Java 运行环境”或“当前 Java 版本为 X，低于最低要求”
+     → 安装 JDK 21 及以上，并确保 java 已加入 PATH
   2) 提示“未找到数据库驱动” → 请使用本包内的 pdms-import-tool.jar
   3) 测试连接超时 → 检查网络、防火墙、数据库监听端口与账号权限
   4) 导入速度慢 → 勾选极速模式；调大并发线程数与批量提交行数；确认数据库磁盘/日志配置
@@ -110,7 +108,7 @@ PDMS 数据导入工具 1.0 —— 实施部署与使用说明（快速版）
                          并内置 PDMS 应用图标，启动后窗口标题栏 / 任务栏即显示该图标）
   run.bat                Windows 启动脚本
   run.sh                 macOS / Linux 启动脚本
-  jdk-path.txt           JDK 路径配置文件（可选；没配 JAVA_HOME 时把 JDK 目录填在这里）
+  jdk-path.txt           JDK 路径配置文件（可选；仅 run.sh 读取，run.bat 不读）
   README.md              完整功能说明（含参数细节、原理与打包成 exe / dmg 的方法）
   QUICKSTART.txt         本文件
   icons/                 应用图标素材
