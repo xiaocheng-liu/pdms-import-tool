@@ -56,6 +56,7 @@ public final class ConfigStore {
         data.put("opt.clearMode", options.getClearMode().name());
         data.put("opt.autoCreateTable", String.valueOf(options.isAutoCreateTable()));
         data.put("opt.continueOnError", String.valueOf(options.isContinueOnError()));
+        data.put("opt.sanitizeCr", String.valueOf(options.isSanitizeCarriageReturn()));
         data.put("opt.writeTimeoutSeconds", String.valueOf(options.getWriteTimeoutSeconds()));
         data.put("last.dir", lastDir == null ? "" : lastDir);
 
@@ -128,6 +129,7 @@ public final class ConfigStore {
         options.setClearMode(parseClearMode(data.get("opt.clearMode")));
         options.setAutoCreateTable(parseBoolean(data.get("opt.autoCreateTable"), options.isAutoCreateTable()));
         options.setContinueOnError(parseBoolean(data.get("opt.continueOnError"), options.isContinueOnError()));
+        options.setSanitizeCarriageReturn(parseBoolean(data.get("opt.sanitizeCr"), options.isSanitizeCarriageReturn()));
         options.setWriteTimeoutSeconds(parseInt(data.get("opt.writeTimeoutSeconds"), options.getWriteTimeoutSeconds()));
     }
 

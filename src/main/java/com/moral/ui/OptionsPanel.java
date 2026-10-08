@@ -23,7 +23,7 @@ public class OptionsPanel extends JPanel {
 
     private final JSpinner threadsSpinner = new JSpinner(new SpinnerNumberModel(6, 1, 32, 1));
     private final JSpinner batchSpinner = new JSpinner(new SpinnerNumberModel(5000, 1, 50000, 1000));
-    private final JSpinner shardSpinner = new JSpinner(new SpinnerNumberModel(200, 1, 4096, 50));
+    private final JSpinner shardSpinner = new JSpinner(new SpinnerNumberModel(100, 1, 4096, 50));
     private final JSpinner maxShardsSpinner = new JSpinner(new SpinnerNumberModel(8, 1, 64, 1));
     private final JSpinner writeTimeoutSpinner = new JSpinner(new SpinnerNumberModel(120, 0, 3600, 30));
     private final JComboBox<String> encodingCombo = new JComboBox<>(new String[]{"UTF-8", "GBK"});
@@ -33,6 +33,7 @@ public class OptionsPanel extends JPanel {
     private final JCheckBox autoCreateCheck = new JCheckBox("表不存在时自动建表");
     private final JCheckBox emptyAsNullCheck = new JCheckBox("空字符串转 NULL");
     private final JCheckBox continueOnErrorCheck = new JCheckBox("失败跳过继续");
+    private final JCheckBox sanitizeCrCheck = new JCheckBox("清洗未加引号的回车符");
 
     public OptionsPanel() {
         setBorder(BorderFactory.createTitledBorder("导入选项"));
@@ -89,6 +90,7 @@ public class OptionsPanel extends JPanel {
         checkPanel.add(autoCreateCheck);
         checkPanel.add(emptyAsNullCheck);
         checkPanel.add(continueOnErrorCheck);
+        checkPanel.add(sanitizeCrCheck);
         constraints.gridy = 3;
         constraints.gridx = 0;
         constraints.gridwidth = 6;
@@ -106,6 +108,10 @@ public class OptionsPanel extends JPanel {
         fastModeCheck.setToolTipText("<html>极速模式：PostgreSQL / 人大金仓走 COPY 批量加载，MySQL 走 LOAD DATA LOCAL INFILE，Oracle/达梦走 APPEND 直接路径插入（单分片）<br>"
                 + "失败会自动降级为标准 INSERT，数据不会丢；降级时失败行定位能力略有下降</html>");
         autoCreateCheck.setToolTipText("表在目标库中不存在时，按 CSV 采样推断类型生成建表语句（执行前可预览编辑）");
+        sanitizeCrCheck.setToolTipText("<html>CSV 中存在未加引号的回车符时，PostgreSQL COPY 会报"
+                + "「unquoted carriage return found in data」并降级为标准写入，标准模式也会把该行拆成两行<br>"
+                + "勾选后：引号外的裸回车符会被替换为空格，行结构保持不变，可继续走极速模式<br>"
+                + "注意：这会改动原始字段内容，日志会提示替换数量</html>");
     }
 
     /** 标签禁止被压缩，避免窄窗口下显示成省略号 */
@@ -128,6 +134,7 @@ public class OptionsPanel extends JPanel {
         options.setAutoCreateTable(autoCreateCheck.isSelected());
         options.setEmptyAsNull(emptyAsNullCheck.isSelected());
         options.setContinueOnError(continueOnErrorCheck.isSelected());
+        options.setSanitizeCarriageReturn(sanitizeCrCheck.isSelected());
     }
 
     /** 用配置对象回填界面 */
@@ -143,6 +150,7 @@ public class OptionsPanel extends JPanel {
         autoCreateCheck.setSelected(options.isAutoCreateTable());
         emptyAsNullCheck.setSelected(options.isEmptyAsNull());
         continueOnErrorCheck.setSelected(options.isContinueOnError());
+        sanitizeCrCheck.setSelected(options.isSanitizeCarriageReturn());
     }
 
     /** 导入进行中禁用所有选项，避免中途改参数 */
@@ -158,5 +166,6 @@ public class OptionsPanel extends JPanel {
         autoCreateCheck.setEnabled(editable);
         emptyAsNullCheck.setEnabled(editable);
         continueOnErrorCheck.setEnabled(editable);
+        sanitizeCrCheck.setEnabled(editable);
     }
 }

@@ -17,6 +17,8 @@ public class TableProgress {
     private volatile long elapsedMs;
     private volatile String message = "";
     private volatile int shardCount = 1;
+    /** 各分片"本次尝试"已读字节的绝对值，用于避免重试时重复累加 */
+    private long[] shardBytes = new long[1];
 
     public TableProgress(String tableName, long bytesTotal) {
         this.tableName = tableName;
@@ -74,8 +76,11 @@ public class TableProgress {
         return shardCount;
     }
 
-    public void setShardCount(int shardCount) {
+    public synchronized void setShardCount(int shardCount) {
         this.shardCount = Math.max(1, shardCount);
+        if (shardBytes.length < this.shardCount) {
+            shardBytes = java.util.Arrays.copyOf(shardBytes, this.shardCount);
+        }
     }
 
     public void start() {
@@ -89,8 +94,27 @@ public class TableProgress {
         }
     }
 
-    public synchronized void addBytes(long bytes) {
-        this.bytesDone += bytes;
+    /**
+     * 上报某个分片"本次尝试"已读取的字节数（绝对值，从 0 起算）。
+     *
+     * <p>用绝对值覆盖而不是累加：极速模式（COPY / LOAD DATA）失败会降级为标准写入并从头重读该分片，
+     * 累加会把同一段字节统计两遍，导致总进度出现 198% 这类超出 100% 的数字。
+     */
+    public synchronized void reportBytes(int shardIndex, long bytes) {
+        if (bytes < 0) {
+            return;
+        }
+        int index = Math.max(0, shardIndex);
+        if (index >= shardBytes.length) {
+            shardBytes = java.util.Arrays.copyOf(shardBytes, index + 1);
+        }
+        shardBytes[index] = bytes;
+        long sum = 0;
+        for (long value : shardBytes) {
+            sum += value;
+        }
+        // 兜底：单表已读字节永远不超过文件体积
+        this.bytesDone = bytesTotal > 0 ? Math.min(bytesTotal, sum) : 0;
     }
 
     public synchronized void addRows(long rows) {

@@ -1,6 +1,7 @@
 package com.moral.task;
 
 import com.moral.csv.ByteRange;
+import com.moral.csv.CarriageReturnSanitizer;
 import com.moral.csv.CsvMeta;
 import com.moral.csv.CsvMetaReader;
 import com.moral.csv.CsvRowReader;
@@ -23,6 +24,7 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
@@ -68,6 +70,8 @@ public class ShardImportTask implements Callable<Boolean> {
     /** 已同步到进度对象的成功/失败行数基线（保证运行中也能看到实时行数） */
     private long syncedSuccessRows;
     private long syncedFailedRows;
+    /** 本次尝试（极速模式或标准模式）已读取的字节数，按绝对值上报给进度对象 */
+    private long attemptBytes;
     /** 任务是否已结束（看门狗线程据此退出） */
     private volatile boolean finished;
     /** 最近一次有进展的时间，看门狗据此判断是否停滞 */
@@ -115,12 +119,14 @@ public class ShardImportTask implements Callable<Boolean> {
         try {
             conn = ConnectionFactory.create(config, options.getWriteTimeoutSeconds());
             if (options.isFastMode() && dialect.supportsFastLoad()) {
+                resetAttempt();
                 Boolean fastResult = fastLoad(conn);
                 if (fastResult != null) {
                     return fastResult;
                 }
                 // 快速路径未写入任何数据，降级为标准批量写入
             }
+            resetAttempt();
             return standardLoad(conn, insertSql);
         } catch (SQLException error) {
             rollback(conn);
@@ -262,6 +268,24 @@ public class ShardImportTask implements Callable<Boolean> {
     // ==================== 极速模式 ====================
 
     /**
+     * 开始一次新的读取尝试（极速模式失败后会降级重读同一个分片）。
+     * 字节进度按"本次尝试的绝对值"上报，重读会覆盖而不是叠加，避免进度超过 100%。
+     */
+    private void resetAttempt() {
+        attemptBytes = 0;
+        progress.reportBytes(range.getIndex(), 0);
+    }
+
+    /** 累加本次尝试已读字节并同步到进度对象（绝对值上报） */
+    private void reportBytes(long delta) {
+        if (delta <= 0) {
+            return;
+        }
+        attemptBytes += delta;
+        progress.reportBytes(range.getIndex(), Math.min(attemptBytes, range.size()));
+    }
+
+    /**
      * 快速路径。
      *
      * @return true/false 表示已完成；null 表示快速路径未生效（未写入任何数据），需降级标准模式
@@ -283,10 +307,17 @@ public class ShardImportTask implements Callable<Boolean> {
     /** PostgreSQL：COPY FROM STDIN */
     private Boolean copyLoad(Connection conn, String copySql) throws SQLException, IOException {
         long written;
-        try (InputStream data = CsvRowReader.openRaw(table.getFile(), range.getStart(), range.getEnd())) {
-            written = dialect.copyIn(conn, copySql, data,
+        CarriageReturnSanitizer sanitizer = null;
+        InputStream raw = CsvRowReader.openRaw(table.getFile(), range.getStart(), range.getEnd());
+        InputStream data = raw;
+        if (options.isSanitizeCarriageReturn()) {
+            sanitizer = new CarriageReturnSanitizer(raw);
+            data = sanitizer;
+        }
+        try (InputStream stream = data) {
+            written = dialect.copyIn(conn, copySql, stream,
                     bytes -> {
-                        progress.addBytes(bytes);
+                        reportBytes(bytes);
                         lastActivityAt = System.currentTimeMillis();
                     },
                     cancelled::get);
@@ -295,7 +326,8 @@ public class ShardImportTask implements Callable<Boolean> {
             if (cancelled.get()) {
                 return false;
             }
-            log("[降级] " + tableLabel + "：极速模式(COPY)失败，改用标准模式重试：" + brief(error.getMessage()));
+            log("[降级] " + tableLabel + "：极速模式(COPY)失败，改用标准模式重试：" + brief(error.getMessage())
+                    + carriageReturnHint(error));
             return null;
         }
         if (cancelled.get()) {
@@ -305,7 +337,29 @@ public class ShardImportTask implements Callable<Boolean> {
         conn.commit();
         progress.addRows(written);
         progress.addSuccess(written);
+        logSanitized(sanitizer);
         return true;
+    }
+
+    /** COPY 报"未加引号的回车符"且尚未开启清洗时，给出可操作的修复建议 */
+    private String carriageReturnHint(SQLException error) {
+        if (options.isSanitizeCarriageReturn()) {
+            return "";
+        }
+        String message = error.getMessage();
+        if (message == null || !message.toLowerCase(Locale.ROOT).contains("carriage return")) {
+            return "";
+        }
+        return "（CSV 中存在未加引号的回车符：可勾选「清洗未加引号的回车符」后重试，或修正源文件；"
+                + "不处理的话标准模式会把该行拆成两行，后半段字段会错位）";
+    }
+
+    /** 清洗生效时提示替换数量，便于确认数据被改动的范围 */
+    private void logSanitized(CarriageReturnSanitizer sanitizer) {
+        if (sanitizer != null && sanitizer.getReplacedCount() > 0) {
+            log("[提示] " + tableLabel + "：已把 " + sanitizer.getReplacedCount()
+                    + " 个未加引号的回车符替换为空格（原始字段内容有变更）");
+        }
     }
 
     /** MySQL：LOAD DATA LOCAL INFILE */
@@ -314,7 +368,7 @@ public class ShardImportTask implements Callable<Boolean> {
         try (InputStream data = CsvRowReader.openRaw(table.getFile(), range.getStart(), range.getEnd())) {
             written = dialect.loadLocalInfile(conn, loadSql, data,
                     bytes -> {
-                        progress.addBytes(bytes);
+                        reportBytes(bytes);
                         lastActivityAt = System.currentTimeMillis();
                     },
                     cancelled::get,
@@ -451,9 +505,11 @@ public class ShardImportTask implements Callable<Boolean> {
         long reportedRows = 0;
         long rows = 0;
         long startedAt = System.currentTimeMillis();
+        long sanitized = 0;
         lastActivityAt = startedAt;
         try (CsvRowReader reader = CsvRowReader.open(table.getFile(), options.getEncoding(),
-                range.getStart(), range.getEnd(), range.getIndex() == 0)) {
+                range.getStart(), range.getEnd(), range.getIndex() == 0,
+                options.isSanitizeCarriageReturn())) {
             CSVRecord record;
             while ((record = reader.next()) != null) {
                 if (cancelled.get()) {
@@ -463,7 +519,7 @@ public class ShardImportTask implements Callable<Boolean> {
                 rows++;
                 if (rows % REPORT_INTERVAL == 0) {
                     long read = reader.bytesRead();
-                    progress.addBytes(read - reportedBytes);
+                    reportBytes(read - reportedBytes);
                     progress.addRows(rows - reportedRows);
                     reportedBytes = read;
                     reportedRows = rows;
@@ -471,12 +527,17 @@ public class ShardImportTask implements Callable<Boolean> {
                     lastActivityAt = System.currentTimeMillis();
                 }
             }
-            progress.addBytes(reader.bytesRead() - reportedBytes);
+            reportBytes(reader.bytesRead() - reportedBytes);
             progress.addRows(rows - reportedRows);
+            sanitized = reader.sanitizedCount();
         }
         writer.flush();
         syncCounters(writer);
         lastActivityAt = System.currentTimeMillis();
+        if (sanitized > 0) {
+            log("[提示] " + tableLabel + "：已把 " + sanitized
+                    + " 个未加引号的回车符替换为空格（原始字段内容有变更）");
+        }
         log("[统计] " + tableLabel + "：成功 " + writer.getSuccessRows() + " 行，失败 "
                 + writer.getFailedRows() + " 行；批次 " + writer.getBatchCount() + " 次，执行累计 "
                 + writer.getExecuteMillis() + " ms，提交累计 " + writer.getCommitMillis()

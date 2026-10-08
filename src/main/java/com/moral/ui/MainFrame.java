@@ -543,21 +543,23 @@ public class MainFrame extends JFrame {
         // 全部表已结束且没有失败/取消时，字节统计上的微小缺口（header、CRLF 归一、尾块未 flush 等）
         // 不应让总进度卡在 99.XX%，统一显示为 100%。
         boolean forceComplete = total > 0 && finished == totalTables && failed == 0;
-        long displayDone = forceComplete ? total : done;
+        // 防御：已读字节永远不应超过总体积；超出说明统计有偏差（如分片重试重复计数），
+        // 直接按满值显示，避免出现 198.81% 这类数字让进度条看起来"卡在满格"。
+        long displayDone = forceComplete || total <= 0 ? total : Math.min(done, total);
 
         long now = System.currentTimeMillis();
         if (lastProgressAt > 0 && now > lastProgressAt) {
-            double instant = (done - lastProgressBytes) / (double) (now - lastProgressAt);
+            double instant = (displayDone - lastProgressBytes) / (double) (now - lastProgressAt);
             smoothRateBytesPerMs = smoothRateBytesPerMs <= 0
                     ? instant
                     : smoothRateBytesPerMs * 0.7 + instant * 0.3;
         }
         lastProgressAt = now;
-        lastProgressBytes = done;
+        lastProgressBytes = displayDone;
 
-        String percentText = total <= 0 ? "0.00%" : String.format("%.2f%%", displayDone * 100.0 / total);
-        totalProgress.setValue(total <= 0 ? 0 : (int) (displayDone * 100L / total));
-        totalProgress.setString(percentText);
+        double percent = total <= 0 ? 0.0 : Math.min(100.0, displayDone * 100.0 / total);
+        totalProgress.setValue(total <= 0 ? 0 : (int) Math.floor(percent));
+        totalProgress.setString(String.format("%.2f%%", percent));
 
         String etaText;
         if (forceComplete) {

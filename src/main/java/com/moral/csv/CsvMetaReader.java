@@ -24,8 +24,13 @@ import java.util.List;
  */
 public final class CsvMetaReader {
 
-    /** 默认采样行数 */
-    public static final int DEFAULT_SAMPLE_ROWS = 500;
+    /**
+     * 默认采样行数。
+     *
+     * <p>采样用于推断列类型与列宽：样本太少时，靠后的大值/特殊格式不会被看到，
+     * 建表列宽偏小就会大量出现 22001（值超长）。这里放大到 5000 行以提高代表性。
+     */
+    public static final int DEFAULT_SAMPLE_ROWS = 5000;
 
     private CsvMetaReader() {
     }
