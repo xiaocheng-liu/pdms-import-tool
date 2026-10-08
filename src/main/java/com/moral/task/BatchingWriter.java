@@ -5,6 +5,7 @@ import com.moral.model.InferredType;
 import com.moral.util.SqlErrors;
 
 import java.io.StringReader;
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
@@ -20,7 +21,11 @@ import java.time.format.SignStyle;
 import java.time.temporal.ChronoField;
 import java.time.temporal.TemporalAccessor;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 批处理写入器：addBatch 累积到指定行数后 executeBatch + commit。
@@ -39,8 +44,17 @@ public final class BatchingWriter {
 
     /** 逐行重放时每多少行提交一次（配合 Savepoint 控制事务大小） */
     private static final int REPLAY_COMMIT_INTERVAL = 100;
+    /** 连续坏行数上限：超过说明不是个别坏行，而是整列与目标表结构不匹配，停止重放 */
+    private static final int MAX_CONSECUTIVE_FAILURE_ROWS = 50;
     /** 明细中原始行的最大长度 */
     private static final int MAX_RAW_LINE = 2000;
+    /** 错误信息里的目标类型长度：character varying(258) / varchar2(100) / char(10) */
+    private static final Pattern TYPE_LENGTH = Pattern.compile(
+            "(?:character varying|nvarchar2|varchar2|varchar|character|char)\\s*\\(\\s*(\\d+)\\s*\\)",
+            Pattern.CASE_INSENSITIVE);
+    /** 错误消息里已经出现的列名：for column 'xxx' / 列 "xxx" */
+    private static final Pattern COLUMN_IN_MESSAGE = Pattern.compile(
+            "(?:for\\s+column\\s+['\"`]?\\w+|列\\s*['\"`]?\\w+)", Pattern.CASE_INSENSITIVE);
 
     /** 宽容的日期时间解析器：日期必填，时间与小数秒可选（2026-09-28 / 2026-9-28 9:5:3.12） */
     private static final DateTimeFormatter FLEX_DATETIME = new DateTimeFormatterBuilder()
@@ -163,7 +177,9 @@ public final class BatchingWriter {
             // 参数绑定阶段发现的数据问题（数值/日期格式非法、超出字段长度等）：
             // 直接记录该行并跳过，不影响同一批里的其它行
             failedRows++;
-            recorder.record(tableLabel, lineNo, describeCode(error), oneLine(error.getMessage()), toCsvLine(values));
+            recorder.record(tableLabel, lineNo, describeCode(error),
+                    oneLine(error.getMessage()) + describeOverflow(error, Collections.singletonList(values)),
+                    toCsvLine(values));
             if (!continueOnError) {
                 throw error;
             }
@@ -242,8 +258,9 @@ public final class BatchingWriter {
         }
         if (!continueOnError) {
             failedRows += size;
+            // 不逐行重放时整批只有一条明细，必须在此补出"疑似超长列"，否则无法定位字段
             recorder.record(tableLabel, firstLineNo(), describeCode(error),
-                    oneLine(error.getMessage()), "");
+                    oneLine(error.getMessage()) + describeOverflow(error, pendingRows), "");
             throw error;
         }
         replayRowByRow();
@@ -252,6 +269,7 @@ public final class BatchingWriter {
     /** 逐行重放本批：坏行精确定位并记录，好行入库 */
     private void replayRowByRow() throws SQLException {
         int replayed = 0;
+        int consecutiveFailures = 0;
         for (int i = 0; i < pendingRows.size(); i++) {
             List<String> row = pendingRows.get(i);
             long lineNo = i < pendingLines.size() ? pendingLines.get(i) : 0L;
@@ -264,15 +282,18 @@ public final class BatchingWriter {
                 bind(row);
                 statement.executeUpdate();
                 successRows++;
+                consecutiveFailures = 0;
             } catch (SQLException rowError) {
                 failedRows++;
+                consecutiveFailures++;
                 if (savepoint != null) {
                     rollbackToQuietly(savepoint);
                 } else {
                     rollbackQuietly();
                 }
                 recorder.record(tableLabel, lineNo, describeCode(rowError),
-                        oneLine(rowError.getMessage()), toCsvLine(row));
+                        oneLine(rowError.getMessage()) + describeOverflow(rowError, Collections.singletonList(row)),
+                        toCsvLine(row));
                 if (SqlErrors.isCancelOrTimeout(rowError)) {
                     // 重放过程中被取消/超时：剩余行不再尝试，直接上抛交给外层降级或失败
                     failedRows += (pendingRows.size() - i - 1);
@@ -280,6 +301,12 @@ public final class BatchingWriter {
                 }
                 if (!continueOnError || !isDataRowError(rowError)) {
                     // 环境性错误：剩余行不再重放，避免刷屏与无效尝试
+                    failedRows += (pendingRows.size() - i - 1);
+                    break;
+                }
+                if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURE_ROWS) {
+                    // 连续整片坏行：通常是整列与目标表结构不匹配（类型/长度），
+                    // 继续逐行重放只会空耗并把批次拖到写入超时，剩余行直接判定失败
                     failedRows += (pendingRows.size() - i - 1);
                     break;
                 }
@@ -292,17 +319,20 @@ public final class BatchingWriter {
         commitQuietly();
     }
 
-    /** 约束冲突、数值/长度超限等属于"数据行自身"的错误，可逐行定位 */
+    /** 约束冲突、数值/长度超限、类型不匹配等属于"数据行自身"的错误，可逐行定位 */
     private static boolean isDataRowError(SQLException error) {
         String state = error.getSQLState();
         if (state == null || state.length() < 2) {
             return true;
         }
         String category = state.substring(0, 2);
+        // 42804 = datatype_mismatch：多为空值/个别行与目标列类型不符，属于"该行"的问题；
+        // 归入数据行错误后走逐行重放，只丢坏行，而不是像环境性错误那样整批 1000 行一起丢
         return "22".equals(category)   // 数据异常（数值、长度、日期格式）
                 || "23".equals(category)   // 完整性约束冲突（唯一键、非空、外键、CHECK）
                 || "21".equals(category)   // 基数违例
-                || "01".equals(category);  // 警告类
+                || "01".equals(category)   // 警告类
+                || "42804".equals(state);
     }
 
     private long firstLineNo() {
@@ -359,7 +389,9 @@ public final class BatchingWriter {
             int index = i + 1;
             ColumnProfile profile = profiles.get(i);
             if (value.isEmpty() && emptyAsNull) {
-                statement.setNull(index, Types.VARCHAR);
+                // 必须按列类型发 NULL：统一用 Types.VARCHAR 时，PostgreSQL 会认为参数是 character varying，
+                // 写入 timestamp / numeric 列会报 42804（类型不匹配）并拖垮整批
+                statement.setNull(index, sqlTypeOf(profile.getType()));
                 continue;
             }
             switch (profile.getType()) {
@@ -398,6 +430,21 @@ public final class BatchingWriter {
                     statement.setString(index, value);
                     break;
             }
+        }
+    }
+
+    /** NULL 绑定用的 SQL 类型：必须与该列的推断类型一致，否则 PostgreSQL 会报 42804 */
+    private static int sqlTypeOf(InferredType type) {
+        switch (type) {
+            case LONG:
+                return Types.BIGINT;
+            case DOUBLE:
+                return Types.DOUBLE;
+            case DATE:
+            case DATETIME:
+                return Types.TIMESTAMP;
+            default:
+                return Types.VARCHAR;
         }
     }
 
@@ -449,8 +496,100 @@ public final class BatchingWriter {
     }
 
     private static String describeCode(SQLException error) {
+        String state = error.getSQLState() == null ? "" : error.getSQLState();
+        // PostgreSQL 驱动的 vendor code 恒为 0，打印 "code=0" 只有干扰，省略
+        return error.getErrorCode() == 0 ? state : state + "/code=" + error.getErrorCode();
+    }
+
+    /**
+     * 长度超限类错误（典型：PG 22001 "value too long for type character varying(258)"）时，
+     * 数据库返回的消息里只有<b>目标类型长度</b>、不含列名，无法直接看出是哪个字段超长。
+     * 此处按错误信息里的类型长度，逐列比对本行（或本批各行）的值长度，补出"疑似超长列"。
+     */
+    private String describeOverflow(SQLException error, List<List<String>> rows) {
+        if (!isLengthError(error) || rows == null || rows.isEmpty()) {
+            return "";
+        }
+        String message = error.getMessage() == null ? "" : error.getMessage();
+        // MySQL（Data too long for column 'x'）与 Oracle（value too large for column "X"）
+        // 的错误消息本身就带列名，无需再猜测
+        if (COLUMN_IN_MESSAGE.matcher(message).find()) {
+            return "";
+        }
+        int limit = extractLengthLimit(message);
+        String overflow = findOverflow(rows, limit, false);
+        if (overflow.isEmpty() && limit > 0) {
+            // Oracle varchar2(n BYTE) 等按字节计长：中文字符数与字节数不一致时改用字节数比对
+            overflow = findOverflow(rows, limit, true);
+        }
+        return overflow;
+    }
+
+    /** 在给定行里找出超限（或最长）的列：byByte=false 按字符数，true 按 UTF-8 字节数 */
+    private String findOverflow(List<List<String>> rows, int limit, boolean byByte) {
+        int maxLength = -1;
+        int columnIndex = -1;
+        String sample = "";
+        for (List<String> row : rows) {
+            if (row == null) {
+                continue;
+            }
+            for (int i = 0; i < row.size(); i++) {
+                String value = row.get(i);
+                int length = value == null ? 0
+                        : (byByte ? value.getBytes(StandardCharsets.UTF_8).length : value.length());
+                // 已知目标长度时只关注超限的列；未知长度时退化为"最长列"提示
+                if (limit > 0 && length <= limit) {
+                    continue;
+                }
+                if (length > maxLength) {
+                    maxLength = length;
+                    columnIndex = i;
+                    sample = abbreviate(value == null ? "" : value);
+                }
+            }
+        }
+        if (columnIndex < 0) {
+            return "";
+        }
+        String column = columnIndex < profiles.size()
+                ? profiles.get(columnIndex).getName()
+                : "第" + (columnIndex + 1) + "列";
+        String unit = byByte ? "字节" : "字符";
+        String detail = limit > 0 ? maxLength + " " + unit + " > 限制 " + limit : "最长 " + maxLength + " " + unit;
+        return "；疑似超长列：" + column + "（" + detail + "，值：「" + sample + "」）";
+    }
+
+    /** 是否为"值超长/超出字段长度"类错误 */
+    private static boolean isLengthError(SQLException error) {
         String state = error.getSQLState();
-        return (state == null ? "" : state) + "/code=" + error.getErrorCode();
+        // 22001 = string_data_right_truncation，22026/22027 为部分库的长度类错误码
+        if ("22001".equals(state) || "22026".equals(state) || "22027".equals(state)) {
+            return true;
+        }
+        String message = error.getMessage();
+        if (message == null) {
+            return false;
+        }
+        String lower = message.toLowerCase(Locale.ROOT);
+        return lower.contains("too long")
+                || lower.contains("too large")
+                || message.contains("过长")
+                || message.contains("超长")
+                || message.contains("超出长度");
+    }
+
+    /** 从错误信息中提取目标类型长度，如 character varying(258) / varchar2(100) → 258 / 100 */
+    private static int extractLengthLimit(String message) {
+        Matcher matcher = TYPE_LENGTH.matcher(message);
+        if (!matcher.find()) {
+            return -1;
+        }
+        try {
+            return Integer.parseInt(matcher.group(1));
+        } catch (NumberFormatException ignore) {
+            return -1;
+        }
     }
 
     private static String oneLine(String text) {

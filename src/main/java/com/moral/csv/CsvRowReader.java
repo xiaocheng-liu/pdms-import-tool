@@ -27,12 +27,16 @@ public final class CsvRowReader implements Closeable {
     private final CSVParser parser;
     private final Iterator<CSVRecord> iterator;
     private final long rangeSize;
+    /** 回车符清洗器（未开启时为 null） */
+    private final CarriageReturnSanitizer sanitizer;
 
-    private CsvRowReader(CountingInputStream counting, CSVParser parser, long rangeSize) {
+    private CsvRowReader(CountingInputStream counting, CSVParser parser, long rangeSize,
+                         CarriageReturnSanitizer sanitizer) {
         this.counting = counting;
         this.parser = parser;
         this.iterator = parser.iterator();
         this.rangeSize = rangeSize;
+        this.sanitizer = sanitizer;
     }
 
     /**
@@ -40,7 +44,19 @@ public final class CsvRowReader implements Closeable {
      *
      * @param skipHeader 是否跳过第一条记录（整表导入时首行为表头；非首个分片用于丢弃"半行"）
      */
-    public static CsvRowReader open(File file, Charset charset, long start, long end, boolean skipHeader) throws IOException {
+    public static CsvRowReader open(File file, Charset charset, long start, long end, boolean skipHeader)
+            throws IOException {
+        return open(file, charset, start, end, skipHeader, false);
+    }
+
+    /**
+     * 打开文件的 [start, end) 区间。
+     *
+     * @param skipHeader 是否跳过第一条记录（整表导入时首行为表头；非首个分片用于丢弃"半行"）
+     * @param sanitizeCr 是否把引号外的裸回车符替换为空格（避免一行被拆成两行）
+     */
+    public static CsvRowReader open(File file, Charset charset, long start, long end,
+                                    boolean skipHeader, boolean sanitizeCr) throws IOException {
         FileInputStream fileStream = new FileInputStream(file);
         FileChannel channel = fileStream.getChannel();
         try {
@@ -51,13 +67,20 @@ public final class CsvRowReader implements Closeable {
         }
         long limit = Math.max(0, end - start);
         CountingInputStream counting = new CountingInputStream(fileStream, limit);
-        Reader reader = new InputStreamReader(counting, charset == null ? StandardCharsets.UTF_8 : charset);
+        CarriageReturnSanitizer sanitizer = sanitizeCr ? new CarriageReturnSanitizer(counting) : null;
+        InputStream source = sanitizer == null ? counting : sanitizer;
+        Reader reader = new InputStreamReader(source, charset == null ? StandardCharsets.UTF_8 : charset);
         CSVParser parser = CsvMetaReader.csvFormat().parse(reader);
-        CsvRowReader rowReader = new CsvRowReader(counting, parser, limit);
+        CsvRowReader rowReader = new CsvRowReader(counting, parser, limit, sanitizer);
         if (skipHeader && rowReader.iterator.hasNext()) {
             rowReader.iterator.next();
         }
         return rowReader;
+    }
+
+    /** 已清洗掉的裸回车符数量（未开启清洗时为 0） */
+    public long sanitizedCount() {
+        return sanitizer == null ? 0 : sanitizer.getReplacedCount();
     }
 
     /**

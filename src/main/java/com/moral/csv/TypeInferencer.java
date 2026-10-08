@@ -17,6 +17,8 @@ public final class TypeInferencer {
     private static final Pattern DECIMAL = Pattern.compile("^-?(\\d+(\\.\\d+)?|\\.\\d+)([eE][+-]?\\d+)?$");
     /** 超过该长度按大字段处理（CLOB/TEXT） */
     private static final int TEXT_THRESHOLD = 4000;
+    /** 字符列的最小宽度：采样再准也只是抽样，太窄的列（如 varchar(2)）几乎必然超长 */
+    private static final int MIN_STRING_LENGTH = 64;
 
     private TypeInferencer() {
     }
@@ -97,10 +99,19 @@ public final class TypeInferencer {
                     profile.setType(InferredType.DATE);
                 } else if (allDecimal[i]) {
                     profile.setType(InferredType.DOUBLE);
-                } else if (profile.getMaxLength() > TEXT_THRESHOLD) {
+                } else if (profile.getMaxLength() > TEXT_THRESHOLD
+                        || profile.getMaxLength() * 2 > TEXT_THRESHOLD) {
+                    // 采样最大值已接近 VARCHAR 上限（列宽按 1.5 倍放宽），后面再出现更长的取值必然超长，
+                    // 直接按大字段建列，避免 varchar(3972) 之类被后续数据撑爆
                     profile.setType(InferredType.TEXT);
                 } else {
                     profile.setType(InferredType.STRING);
+                }
+            }
+            // 采样只覆盖前若干行，字符列长度过窄极易触发 22001（值超长），给一个最小宽度兜底
+            for (ColumnProfile profile : profiles) {
+                if (profile.getType() == InferredType.STRING && profile.getMaxLength() < MIN_STRING_LENGTH) {
+                    profile.setMaxLength(MIN_STRING_LENGTH);
                 }
             }
         }

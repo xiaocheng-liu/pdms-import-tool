@@ -30,7 +30,7 @@ public class ImportOptions {
     /** 每批提交行数 */
     private int batchSize = 5000;
     /** 大表分片阈值（字节），超过则拆分并行导入 */
-    private long shardThresholdBytes = 200L * 1024 * 1024;
+    private long shardThresholdBytes = 100L * 1024 * 1024;
     /** 单表最大分片数：实际分片数 = min(并发线程数, 该值) */
     private int maxShardsPerTable = 8;
     /** 极速模式：PG 使用 COPY、Oracle/达梦使用直接路径插入；失败时自动降级为标准模式 */
@@ -45,6 +45,12 @@ public class ImportOptions {
     private boolean autoCreateTable = false;
     /** 单批失败时跳过并继续 */
     private boolean continueOnError = true;
+    /**
+     * 清洗"未加引号的回车符"：把引号外的裸 \r 替换为空格。
+     * 默认关闭（不改动原始数据）；开启后可避免 PG COPY 报
+     * "unquoted carriage return found in data" 而降级，也能避免标准模式把该行拆成两行。
+     */
+    private boolean sanitizeCarriageReturn = false;
     /**
      * 写入超时（秒）：单个批次执行/提交超过该时间且无进展时，看门狗自动取消当前批次。
      * 0 表示关闭自动中断（仅保留连接层网络超时兜底）。
@@ -149,6 +155,14 @@ public class ImportOptions {
 
     public void setContinueOnError(boolean continueOnError) {
         this.continueOnError = continueOnError;
+    }
+
+    public boolean isSanitizeCarriageReturn() {
+        return sanitizeCarriageReturn;
+    }
+
+    public void setSanitizeCarriageReturn(boolean sanitizeCarriageReturn) {
+        this.sanitizeCarriageReturn = sanitizeCarriageReturn;
     }
 
     public int getWriteTimeoutSeconds() {
