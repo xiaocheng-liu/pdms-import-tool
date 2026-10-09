@@ -42,6 +42,8 @@ public class DamengDialect extends OracleDialect {
                 return "BIGINT";
             case DOUBLE:
                 return "DOUBLE";
+            case DECIMAL:
+                return "DECIMAL(38, 10)";
             case DATE:
                 return "DATE";
             case DATETIME:

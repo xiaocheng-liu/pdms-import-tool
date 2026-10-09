@@ -25,6 +25,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
 import java.util.Locale;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
@@ -291,6 +292,10 @@ public class ShardImportTask implements Callable<Boolean> {
      * @return true/false 表示已完成；null 表示快速路径未生效（未写入任何数据），需降级标准模式
      */
     private Boolean fastLoad(Connection conn) throws SQLException, IOException {
+        if (!StandardCharsets.UTF_8.equals(options.getEncoding())) {
+            log("[提示] " + tableLabel + "：极速模式仅支持 UTF-8，当前编码将自动降级为标准写入");
+            return null;
+        }
         String copySql = dialect.buildCopyInSql(config.getSchema(), tableName, meta.getColumns(),
                 options.isEmptyAsNull(), range.getIndex() == 0);
         if (copySql != null) {
@@ -469,6 +474,14 @@ public class ShardImportTask implements Callable<Boolean> {
         BatchingWriter writer = activeWriter;
         if (writer != null) {
             writer.cancelCurrent();
+        }
+        Statement streamStatement = activeStreamStatement;
+        if (streamStatement != null) {
+            try {
+                streamStatement.cancel();
+            } catch (SQLException ignore) {
+                // 语句已结束或驱动不支持取消
+            }
         }
     }
 

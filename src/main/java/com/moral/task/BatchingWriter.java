@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.math.BigDecimal;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -44,8 +45,6 @@ public final class BatchingWriter {
 
     /** 逐行重放时每多少行提交一次（配合 Savepoint 控制事务大小） */
     private static final int REPLAY_COMMIT_INTERVAL = 100;
-    /** 连续坏行数上限：超过说明不是个别坏行，而是整列与目标表结构不匹配，停止重放 */
-    private static final int MAX_CONSECUTIVE_FAILURE_ROWS = 50;
     /** 明细中原始行的最大长度 */
     private static final int MAX_RAW_LINE = 2000;
     /**
@@ -270,10 +269,7 @@ public final class BatchingWriter {
             failedRows += size;
             recorder.record(tableLabel, firstLineNo(), describeCode(error),
                     SqlErrors.readableMessage(error) + describeTypeLookupHint(error, size), "");
-            if (!continueOnError) {
-                throw error;
-            }
-            return;
+            throw error;
         }
         if (!continueOnError) {
             failedRows += size;
@@ -288,23 +284,20 @@ public final class BatchingWriter {
     /** 逐行重放本批：坏行精确定位并记录，好行入库 */
     private void replayRowByRow() throws SQLException {
         int replayed = 0;
-        int consecutiveFailures = 0;
         for (int i = 0; i < pendingRows.size(); i++) {
             List<String> row = pendingRows.get(i);
             long lineNo = i < pendingLines.size() ? pendingLines.get(i) : 0L;
             Savepoint savepoint = createSavepoint();
             if (savepoint == null) {
                 // 驱动不支持 Savepoint：先提交已成功的数据，避免被坏行连累
-                commitQuietly();
+                    commitReplayRows();
             }
             try {
                 bind(row);
                 statement.executeUpdate();
-                successRows++;
-                consecutiveFailures = 0;
+                // 成功数在提交后统一确认，避免提交失败时留下虚假的成功数。
             } catch (SQLException rowError) {
                 failedRows++;
-                consecutiveFailures++;
                 if (savepoint != null) {
                     rollbackToQuietly(savepoint);
                 } else {
@@ -323,19 +316,13 @@ public final class BatchingWriter {
                     failedRows += (pendingRows.size() - i - 1);
                     break;
                 }
-                if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURE_ROWS) {
-                    // 连续整片坏行：通常是整列与目标表结构不匹配（类型/长度），
-                    // 继续逐行重放只会空耗并把批次拖到写入超时，剩余行直接判定失败
-                    failedRows += (pendingRows.size() - i - 1);
-                    break;
-                }
             }
             replayed++;
             if (replayed % REPLAY_COMMIT_INTERVAL == 0) {
-                commitQuietly();
+                commitReplayRows();
             }
         }
-        commitQuietly();
+        commitReplayRows();
     }
 
     /** 约束冲突、数值/长度超限、类型不匹配等属于"数据行自身"的错误，可逐行定位 */
@@ -385,12 +372,8 @@ public final class BatchingWriter {
         }
     }
 
-    private void commitQuietly() {
-        try {
-            conn.commit();
-        } catch (SQLException ignore) {
-            // 提交失败由后续操作报错体现
-        }
+    private void commitReplayRows() throws SQLException {
+        conn.commit();
     }
 
     private void clearBatchQuietly() {
@@ -425,12 +408,13 @@ public final class BatchingWriter {
                     statement.setLong(index, number);
                     break;
                 }
-                case DOUBLE: {
-                    Double number = parseDouble(value);
+                case DOUBLE:
+                case DECIMAL: {
+                    BigDecimal number = parseDecimal(value);
                     if (number == null) {
                         throw dataError(profile, value, "22018", 22018, "不是合法数字");
                     }
-                    statement.setDouble(index, number);
+                    statement.setBigDecimal(index, number);
                     break;
                 }
                 case DATE:
@@ -462,6 +446,8 @@ public final class BatchingWriter {
                 return Types.BIGINT;
             case DOUBLE:
                 return Types.DOUBLE;
+            case DECIMAL:
+                return Types.DECIMAL;
             case DATE:
             case DATETIME:
                 return Types.TIMESTAMP;
@@ -490,9 +476,9 @@ public final class BatchingWriter {
         }
     }
 
-    private static Double parseDouble(String value) {
+    private static BigDecimal parseDecimal(String value) {
         try {
-            return Double.valueOf(value.trim());
+            return new BigDecimal(value.trim());
         } catch (NumberFormatException ignore) {
             return null;
         }

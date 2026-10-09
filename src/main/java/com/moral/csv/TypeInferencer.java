@@ -5,6 +5,7 @@ import com.moral.model.InferredType;
 
 import java.util.List;
 import java.util.regex.Pattern;
+import java.math.BigDecimal;
 
 /**
  * 采样推断列类型：整数 / 小数 / 日期 / 日期时间 / 长文本 / 字符串。
@@ -13,7 +14,7 @@ public final class TypeInferencer {
 
     private static final Pattern DATE = Pattern.compile("^\\d{4}-\\d{2}-\\d{2}$");
     private static final Pattern DATE_TIME = Pattern.compile("^\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?$");
-    private static final Pattern INTEGER = Pattern.compile("^-?\\d{1,18}$");
+    private static final Pattern INTEGER = Pattern.compile("^-?(0|[1-9]\\d{0,18})$");
     private static final Pattern DECIMAL = Pattern.compile("^-?(\\d+(\\.\\d+)?|\\.\\d+)([eE][+-]?\\d+)?$");
     /** 超过该长度按大字段处理（CLOB/TEXT） */
     private static final int TEXT_THRESHOLD = 4000;
@@ -98,7 +99,7 @@ public final class TypeInferencer {
                 } else if (allDate[i]) {
                     profile.setType(InferredType.DATE);
                 } else if (allDecimal[i]) {
-                    profile.setType(InferredType.DOUBLE);
+                    profile.setType(InferredType.DECIMAL);
                 } else if (profile.getMaxLength() > TEXT_THRESHOLD
                         || profile.getMaxLength() * 2 > TEXT_THRESHOLD) {
                     // 采样最大值已接近 VARCHAR 上限（列宽按 1.5 倍放宽），后面再出现更长的取值必然超长，

@@ -102,6 +102,8 @@ public class PgDialect implements Dialect {
                 return "BIGINT";
             case DOUBLE:
                 return "DOUBLE PRECISION";
+            case DECIMAL:
+                return "NUMERIC";
             case DATE:
                 return "DATE";
             case DATETIME:

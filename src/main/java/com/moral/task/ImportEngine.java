@@ -36,6 +36,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -60,7 +61,11 @@ public final class ImportEngine {
      */
     public void cancel() {
         cancelled.set(true);
-        for (ShardImportTask task : submittedTasks) {
+        List<ShardImportTask> tasks;
+        synchronized (submittedTasks) {
+            tasks = new ArrayList<>(submittedTasks);
+        }
+        for (ShardImportTask task : tasks) {
             try {
                 task.cancelDatabaseWork();
             } catch (RuntimeException ignore) {
@@ -167,6 +172,7 @@ public final class ImportEngine {
         long startedAt = System.currentTimeMillis();
 
         pool = Executors.newFixedThreadPool(options.getThreads(), new NamedThreadFactory());
+        submittedTasks.clear();
         ExecutorService currentPool = pool;
         // 分片任务结果：主线程提交、进度 ticker 线程读取，需同步访问
         final Map<CsvTable, List<Future<Boolean>>> futures = Collections.synchronizedMap(new LinkedHashMap<>());
@@ -256,6 +262,9 @@ public final class ImportEngine {
         }
 
         currentPool.shutdown();
+        if (cancelled.get()) {
+            cancelPendingFutures(futures);
+        }
         while (!currentPool.awaitTermination(1, TimeUnit.SECONDS)) {
             if (cancelled.get()) {
                 currentPool.shutdownNow();
@@ -390,6 +399,9 @@ public final class ImportEngine {
                 String error = "";
                 for (Future<Boolean> future : tableFutures) {
                     try {
+                        if (future.isCancelled()) {
+                            continue;
+                        }
                         Boolean value = future.get();
                         if (value == null || !value) {
                             ok = false;
@@ -397,6 +409,8 @@ public final class ImportEngine {
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                         ok = false;
+                    } catch (CancellationException e) {
+                        continue;
                     } catch (Exception e) {
                         ok = false;
                         Throwable cause = e.getCause() == null ? e : e.getCause();
@@ -439,6 +453,19 @@ public final class ImportEngine {
         result.setFailedRows(failedRows);
         for (com.moral.model.FailureRecord record : recorder.snapshot()) {
             result.addFailure(record);
+        }
+    }
+
+    /** 取消时清理线程池队列中的任务，避免汇总阶段无限等待未执行的 Future。 */
+    private void cancelPendingFutures(Map<CsvTable, List<Future<Boolean>>> futures) {
+        synchronized (futures) {
+            for (List<Future<Boolean>> tableFutures : futures.values()) {
+                for (Future<Boolean> future : tableFutures) {
+                    if (!future.isDone()) {
+                        future.cancel(false);
+                    }
+                }
+            }
         }
     }
 

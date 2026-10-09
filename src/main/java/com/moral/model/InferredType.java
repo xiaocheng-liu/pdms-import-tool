@@ -8,6 +8,8 @@ public enum InferredType {
     LONG,
     /** 小数 */
     DOUBLE,
+    /** 精确小数 */
+    DECIMAL,
     /** 日期 yyyy-MM-dd */
     DATE,
     /** 日期时间 yyyy-MM-dd HH:mm:ss */

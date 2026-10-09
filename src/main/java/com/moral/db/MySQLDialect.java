@@ -114,6 +114,8 @@ public class MySQLDialect implements Dialect {
                 return "BIGINT";
             case DOUBLE:
                 return "DOUBLE";
+            case DECIMAL:
+                return "DECIMAL(65, 30)";
             case DATE:
                 return "DATE";
             case DATETIME:
