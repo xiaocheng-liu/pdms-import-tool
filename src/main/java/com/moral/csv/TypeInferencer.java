@@ -5,7 +5,6 @@ import com.moral.model.InferredType;
 
 import java.util.List;
 import java.util.regex.Pattern;
-import java.math.BigDecimal;
 
 /**
  * 采样推断列类型：整数 / 小数 / 日期 / 日期时间 / 长文本 / 字符串。
@@ -15,7 +14,7 @@ public final class TypeInferencer {
     private static final Pattern DATE = Pattern.compile("^\\d{4}-\\d{2}-\\d{2}$");
     private static final Pattern DATE_TIME = Pattern.compile("^\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?$");
     private static final Pattern INTEGER = Pattern.compile("^-?(0|[1-9]\\d{0,18})$");
-    private static final Pattern DECIMAL = Pattern.compile("^-?(\\d+(\\.\\d+)?|\\.\\d+)([eE][+-]?\\d+)?$");
+    private static final Pattern DECIMAL = Pattern.compile("^-?((0|[1-9]\\d*)(\\.\\d+)?|\\.\\d+)([eE][+-]?\\d+)?$");
     /** 超过该长度按大字段处理（CLOB/TEXT） */
     private static final int TEXT_THRESHOLD = 4000;
     /** 字符列的最小宽度：采样再准也只是抽样，太窄的列（如 varchar(2)）几乎必然超长 */
@@ -70,6 +69,12 @@ public final class TypeInferencer {
                 }
                 if (!INTEGER.matcher(value).matches()) {
                     allInteger[i] = false;
+                } else if (allInteger[i]) {
+                    try {
+                        Long.parseLong(value);
+                    } catch (NumberFormatException error) {
+                        allInteger[i] = false;
+                    }
                 }
                 if (!DECIMAL.matcher(value).matches()) {
                     allDecimal[i] = false;

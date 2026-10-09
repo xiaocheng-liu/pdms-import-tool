@@ -270,7 +270,7 @@ public class MainFrame extends JFrame {
 
     private void saveConfig() {
         optionsPanel.applyTo(options);
-        ConfigStore.save(connectionPanel.buildConfig(), options, folderPanel.getDirectory(), true);
+        ConfigStore.save(connectionPanel.buildConfig(), options, folderPanel.getDirectory(), false);
     }
 
     private void scanFolder() {
@@ -365,6 +365,7 @@ public class MainFrame extends JFrame {
 
     private void runImport(ConnectionConfig config, List<CsvTable> selected, Map<String, String> ddlMap) {
         running = true;
+        lastResult = null;
         importStartedAt = System.currentTimeMillis();
         lastProgressAt = 0;
         lastProgressBytes = 0;

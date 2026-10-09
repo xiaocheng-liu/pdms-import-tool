@@ -1,6 +1,7 @@
 package com.moral.task;
 
 import com.moral.model.ColumnProfile;
+import com.moral.db.ConnectionFactory;
 import com.moral.model.InferredType;
 import com.moral.util.SqlErrors;
 
@@ -9,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Savepoint;
 import java.sql.Timestamp;
 import java.sql.Types;
@@ -45,8 +47,6 @@ public final class BatchingWriter {
 
     /** 逐行重放时每多少行提交一次（配合 Savepoint 控制事务大小） */
     private static final int REPLAY_COMMIT_INTERVAL = 100;
-    /** 明细中原始行的最大长度 */
-    private static final int MAX_RAW_LINE = 2000;
     /**
      * 错误信息里的目标类型长度：character varying(258) / varchar2(100) / char(10)；
      * 以及金仓简体中文提示里的长度写法：对于可变字符类型来说，值太长了(96)
@@ -102,6 +102,9 @@ public final class BatchingWriter {
 
     private volatile long successRows;
     private volatile long failedRows;
+    private volatile boolean cancellationRequested;
+    /** 提交或回滚结果不确定时，禁止从头重试。 */
+    private boolean transactionUncertain;
 
     /** 耗时统计：用于定位瓶颈在数据库执行、提交还是客户端读取 */
     private volatile long batchCount;
@@ -153,11 +156,8 @@ public final class BatchingWriter {
      * JDBC 的 executeBatch/commit 不响应线程中断，必须显式 cancel 才能立刻停下来。
      */
     public void cancelCurrent() {
-        try {
-            statement.cancel();
-        } catch (SQLException ignore) {
-            // 语句已执行完或驱动不支持取消，忽略
-        }
+        cancellationRequested = true;
+        ConnectionFactory.cancelQuietly(statement);
     }
 
     /** 累计 executeBatch 耗时（毫秒） */
@@ -182,13 +182,17 @@ public final class BatchingWriter {
      * 这类行若按位置绑定，后半行的值会整体左移写进前面的列（例如把证型文本写进整型 ID 列，
      * 报 22018 不是合法整数），既看不出真实原因，也可能悄悄把数据写错位置。
      */
-    public void skipMalformedRow(long lineNo, String message, List<String> values) {
+    public void skipMalformedRow(long lineNo, String message, List<String> values) throws SQLException {
         failedRows++;
         recorder.record(tableLabel, lineNo, "ROW_FORMAT", message, toCsvLine(values));
+        if (!continueOnError) {
+            throw new SQLException(message, "22000");
+        }
     }
 
     /** 加入一行，达到批量大小时自动提交（values 由调用方逐行新建，此处直接持有引用以避免复制开销） */
     public void write(List<String> values, long lineNo) throws SQLException {
+        checkCancelled();
         try {
             bind(values);
         } catch (SQLException error) {
@@ -198,7 +202,7 @@ public final class BatchingWriter {
             recorder.record(tableLabel, lineNo, describeCode(error),
                     SqlErrors.readableMessage(error) + describeOverflow(error, Collections.singletonList(values)),
                     toCsvLine(values));
-            if (!continueOnError) {
+            if (!continueOnError || !isDataRowError(error) || SqlErrors.isCancelOrTimeout(error)) {
                 throw error;
             }
             return;
@@ -220,20 +224,38 @@ public final class BatchingWriter {
         long start = System.nanoTime();
         batchStartedAt = System.currentTimeMillis();
         try {
-            if (writeTimeoutSeconds > 0) {
-                statement.setQueryTimeout(writeTimeoutSeconds);
+            try {
+                checkCancelled();
+                if (writeTimeoutSeconds > 0) {
+                    statement.setQueryTimeout(writeTimeoutSeconds);
+                }
+                statement.executeBatch();
+            } catch (SQLException error) {
+                try {
+                    conn.rollback();
+                } catch (SQLException rollbackError) {
+                    transactionUncertain = true;
+                    error.addSuppressed(rollbackError);
+                    failedRows += size;
+                    throw error;
+                }
+                handleBatchError(error, size);
+                return;
             }
-            statement.executeBatch();
             long afterExecute = System.nanoTime();
-            conn.commit();
+            try {
+                commitRows(size);
+            } catch (SQLException error) {
+                rollbackQuietly();
+                failedRows += size;
+                recorder.record(tableLabel, firstLineNo(), describeCode(error),
+                        "提交失败或被取消，禁止自动重放，请核对目标数据：" + SqlErrors.readableMessage(error), "");
+                throw error;
+            }
             long afterCommit = System.nanoTime();
             batchCount++;
             executeNanos += (afterExecute - start);
             commitNanos += (afterCommit - afterExecute);
-            successRows += size;
-        } catch (SQLException error) {
-            rollbackQuietly();
-            handleBatchError(error, size);
         } finally {
             lastBatchNanos = System.nanoTime() - start;
             batchStartedAt = 0;
@@ -283,46 +305,50 @@ public final class BatchingWriter {
 
     /** 逐行重放本批：坏行精确定位并记录，好行入库 */
     private void replayRowByRow() throws SQLException {
-        int replayed = 0;
-        for (int i = 0; i < pendingRows.size(); i++) {
-            List<String> row = pendingRows.get(i);
-            long lineNo = i < pendingLines.size() ? pendingLines.get(i) : 0L;
-            Savepoint savepoint = createSavepoint();
-            if (savepoint == null) {
-                // 驱动不支持 Savepoint：先提交已成功的数据，避免被坏行连累
-                    commitReplayRows();
-            }
-            try {
-                bind(row);
-                statement.executeUpdate();
-                // 成功数在提交后统一确认，避免提交失败时留下虚假的成功数。
-            } catch (SQLException rowError) {
-                failedRows++;
-                if (savepoint != null) {
-                    rollbackToQuietly(savepoint);
-                } else {
-                    rollbackQuietly();
+        long successBefore = successRows;
+        long failedBefore = failedRows;
+        int uncommitted = 0;
+        try {
+            statement.clearBatch();
+            for (int i = 0; i < pendingRows.size(); i++) {
+                checkCancelled();
+                List<String> row = pendingRows.get(i);
+                long lineNo = pendingLines.get(i);
+                Savepoint savepoint = createSavepoint();
+                if (savepoint == null) {
+                    commitRows(uncommitted);
+                    uncommitted = 0;
                 }
-                recorder.record(tableLabel, lineNo, describeCode(rowError),
-                        SqlErrors.readableMessage(rowError) + describeOverflow(rowError, Collections.singletonList(row)),
-                        toCsvLine(row));
-                if (SqlErrors.isCancelOrTimeout(rowError)) {
-                    // 重放过程中被取消/超时：剩余行不再尝试，直接上抛交给外层降级或失败
-                    failedRows += (pendingRows.size() - i - 1);
-                    throw rowError;
+                try {
+                    bind(row);
+                    statement.executeUpdate();
+                    uncommitted++;
+                } catch (SQLException rowError) {
+                    failedRows++;
+                    recorder.record(tableLabel, lineNo, describeCode(rowError),
+                            SqlErrors.readableMessage(rowError)
+                                    + describeOverflow(rowError, Collections.singletonList(row)), toCsvLine(row));
+                    if (SqlErrors.isCancelOrTimeout(rowError) || !isDataRowError(rowError)) {
+                        throw rowError;
+                    }
+                    // 保存点回滚失败时终止整批，不能把已被回滚的好行计为成功。
+                    if (savepoint != null) {
+                        conn.rollback(savepoint);
+                    } else {
+                        conn.rollback();
+                    }
                 }
-                if (!continueOnError || !isDataRowError(rowError)) {
-                    // 环境性错误：剩余行不再重放，避免刷屏与无效尝试
-                    failedRows += (pendingRows.size() - i - 1);
-                    break;
+                if (savepoint == null || (i + 1) % REPLAY_COMMIT_INTERVAL == 0) {
+                    commitRows(uncommitted);
+                    uncommitted = 0;
                 }
             }
-            replayed++;
-            if (replayed % REPLAY_COMMIT_INTERVAL == 0) {
-                commitReplayRows();
-            }
+            commitRows(uncommitted);
+        } catch (SQLException error) {
+            rollbackQuietly();
+            failedRows += pendingRows.size() - (successRows - successBefore) - (failedRows - failedBefore);
+            throw error;
         }
-        commitReplayRows();
     }
 
     /** 约束冲突、数值/长度超限、类型不匹配等属于"数据行自身"的错误，可逐行定位 */
@@ -348,19 +374,11 @@ public final class BatchingWriter {
         return pendingLines.isEmpty() ? 0L : pendingLines.get(0);
     }
 
-    private Savepoint createSavepoint() {
+    private Savepoint createSavepoint() throws SQLException {
         try {
             return conn.setSavepoint();
-        } catch (SQLException | AbstractMethodError ignore) {
+        } catch (SQLFeatureNotSupportedException | AbstractMethodError ignore) {
             return null;
-        }
-    }
-
-    private void rollbackToQuietly(Savepoint savepoint) {
-        try {
-            conn.rollback(savepoint);
-        } catch (SQLException ignore) {
-            rollbackQuietly();
         }
     }
 
@@ -368,12 +386,35 @@ public final class BatchingWriter {
         try {
             conn.rollback();
         } catch (SQLException ignore) {
-            // 回滚失败不中断流程
+            transactionUncertain = true;
         }
     }
 
-    private void commitReplayRows() throws SQLException {
-        conn.commit();
+    /** 只有数据库确认提交后才计入成功行数。 */
+    private void commitRows(int rows) throws SQLException {
+        if (rows == 0) {
+            return;
+        }
+        checkCancelled();
+        try {
+            conn.commit();
+        } catch (SQLException error) {
+            transactionUncertain = true;
+            throw error;
+        }
+        successRows += rows;
+    }
+
+    /** 仅未产生结果且事务状态明确时允许快速模式从头降级。 */
+    public boolean canRetryFromStart() {
+        return successRows == 0 && failedRows == 0 && !transactionUncertain && !cancellationRequested;
+    }
+
+    /** 取消标记覆盖读取、重放和提交前的检查点。 */
+    private void checkCancelled() throws SQLException {
+        if (cancellationRequested) {
+            throw new SQLException("导入已取消", "57014");
+        }
     }
 
     private void clearBatchQuietly() {
@@ -401,6 +442,7 @@ public final class BatchingWriter {
             }
             switch (profile.getType()) {
                 case LONG: {
+                    checkNumericRepresentation(profile, value);
                     Long number = parseLong(value);
                     if (number == null) {
                         throw dataError(profile, value, "22018", 22018, "不是合法整数");
@@ -410,6 +452,7 @@ public final class BatchingWriter {
                 }
                 case DOUBLE:
                 case DECIMAL: {
+                    checkNumericRepresentation(profile, value);
                     BigDecimal number = parseDecimal(value);
                     if (number == null) {
                         throw dataError(profile, value, "22018", 22018, "不是合法数字");
@@ -473,6 +516,17 @@ public final class BatchingWriter {
             return Long.valueOf(value.trim());
         } catch (NumberFormatException ignore) {
             return null;
+        }
+    }
+
+    /** 采样外出现编码式前导零时保留失败原文，不能静默丢零。 */
+    private static void checkNumericRepresentation(ColumnProfile profile, String value) throws SQLException {
+        String text = value.trim();
+        int start = text.startsWith("-") || text.startsWith("+") ? 1 : 0;
+        if (text.length() > start + 1 && text.charAt(start) == '0'
+                && text.charAt(start + 1) >= '0' && text.charAt(start + 1) <= '9') {
+            throw dataError(profile, value, "22018", 22018,
+                    "含前导零，与采样数值类型冲突；请按字符列导入，避免编码丢零");
         }
     }
 
@@ -683,7 +737,6 @@ public final class BatchingWriter {
             String value = values.get(i) == null ? "" : values.get(i);
             builder.append('"').append(value.replace("\"", "\"\"")).append('"');
         }
-        String line = builder.toString();
-        return line.length() > MAX_RAW_LINE ? line.substring(0, MAX_RAW_LINE) + "...(已截断)" : line;
+        return builder.toString();
     }
 }

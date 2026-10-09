@@ -5,6 +5,7 @@ import com.moral.model.ConnectionConfig;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.Properties;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -112,6 +113,34 @@ public final class ConnectionFactory {
                 // 关闭失败忽略
             }
         }
+    }
+
+    /** 异步终止连接，覆盖 COPY 和 commit 阻塞，避免停止操作卡住界面线程。 */
+    public static void abortQuietly(Connection conn) {
+        if (conn == null) {
+            return;
+        }
+        TIMEOUT_EXECUTOR.execute(() -> {
+            try {
+                conn.abort(Runnable::run);
+            } catch (SQLException | AbstractMethodError | UnsupportedOperationException error) {
+                closeQuietly(conn);
+            }
+        });
+    }
+
+    /** 驱动的 cancel 也可能阻塞，统一放到后台执行。 */
+    public static void cancelQuietly(Statement statement) {
+        if (statement == null) {
+            return;
+        }
+        TIMEOUT_EXECUTOR.execute(() -> {
+            try {
+                statement.cancel();
+            } catch (SQLException | UnsupportedOperationException ignore) {
+                // 语句可能已被连接级终止关闭。
+            }
+        });
     }
 
     private static void loadDriver(String driverClass) throws SQLException {

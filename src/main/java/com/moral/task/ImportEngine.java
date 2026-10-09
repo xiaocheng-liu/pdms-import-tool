@@ -38,6 +38,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -54,6 +55,7 @@ public final class ImportEngine {
     private final AtomicBoolean cancelled = new AtomicBoolean(false);
     private final List<ShardImportTask> submittedTasks = Collections.synchronizedList(new ArrayList<>());
     private volatile ExecutorService pool;
+    private volatile Connection prepareConnection;
 
     /**
      * 停止导入：先中断各任务正在挂起的数据库操作（JDBC 的 executeBatch/commit 不响应线程中断，
@@ -61,6 +63,7 @@ public final class ImportEngine {
      */
     public void cancel() {
         cancelled.set(true);
+        ConnectionFactory.abortQuietly(prepareConnection);
         List<ShardImportTask> tasks;
         synchronized (submittedTasks) {
             tasks = new ArrayList<>(submittedTasks);
@@ -74,7 +77,7 @@ public final class ImportEngine {
         }
         ExecutorService current = pool;
         if (current != null) {
-            current.shutdownNow();
+            cancelQueuedTasks(current);
         }
     }
 
@@ -150,143 +153,177 @@ public final class ImportEngine {
         ImportResult result = new ImportResult();
         result.setTotalTables(tables.size());
         FailureRecorder recorder = new FailureRecorder();
-        // 失败明细实时落盘，程序异常中断也不会丢失；同时限量回显到界面日志
+        ExecutorService currentPool = null;
+        ScheduledExecutorService ticker = null;
         try {
-            recorder.openSink(FailureRecorder.defaultLogFile());
-        } catch (Exception e) {
-            listener.onLog("失败明细日志文件创建失败：" + e.getMessage());
-        }
-        final AtomicInteger failureLogCount = new AtomicInteger();
-        recorder.setListener(record -> {
-            int count = failureLogCount.incrementAndGet();
-            if (count <= MAX_FAILURE_LOG_LINES) {
-                listener.onLog("[失败行] " + record.getTable() + " 第 " + record.getLineNo()
-                        + " 行：" + record.getErrorCode() + " " + record.getMessage());
-            } else if (count == MAX_FAILURE_LOG_LINES + 1) {
-                listener.onLog("失败行较多，界面仅回显前 " + MAX_FAILURE_LOG_LINES + " 条，完整明细见失败日志文件");
+            // 失败明细实时落盘，程序异常中断也不会丢失；同时限量回显到界面日志
+            try {
+                recorder.openSink(FailureRecorder.defaultLogFile());
+            } catch (Exception e) {
+                listener.onLog("失败明细日志文件创建失败：" + e.getMessage());
+                throw e;
             }
-        });
-        Dialect dialect = DialectFactory.get(config.getDbType());
-        // 先把"驱动参数协议是否可用"探明白，保证后面所有连接（含并发分片）都按同一口径打开
-        ProtocolCompat.detectOnce(config, listener::onLog);
-        long startedAt = System.currentTimeMillis();
-
-        pool = Executors.newFixedThreadPool(options.getThreads(), new NamedThreadFactory());
-        submittedTasks.clear();
-        ExecutorService currentPool = pool;
-        // 分片任务结果：主线程提交、进度 ticker 线程读取，需同步访问
-        final Map<CsvTable, List<Future<Boolean>>> futures = Collections.synchronizedMap(new LinkedHashMap<>());
-        // 已定稿（状态已落定）的表，避免重复定稿与重复回调
-        final Set<CsvTable> finalizedTables = ConcurrentHashMap.newKeySet();
-        ScheduledExecutorService ticker = Executors.newSingleThreadScheduledExecutor(new NamedThreadFactory("progress-ticker"));
-        ticker.scheduleAtFixedRate(new Runnable() {
-            @Override
-            public void run() {
-                // 某张表的全部分片结束后立即定稿，不必等其它表跑完才一起汇总
-                finalizeFinishedTables(futures, finalizedTables, cancelled, listener);
-                listener.onTick();
-            }
-        }, 500, 500, TimeUnit.MILLISECONDS);
-
-        if (options.isFastMode()) {
-            listener.onLog("极速模式已开启：" + describeFastMode(dialect));
-        }
-
-        try (Connection prepareConn = ConnectionFactory.create(config)) {
-            for (CsvTable table : tables) {
-                if (cancelled.get()) {
-                    break;
+            final AtomicInteger failureLogCount = new AtomicInteger();
+            recorder.setListener(record -> {
+                int count = failureLogCount.incrementAndGet();
+                if (count <= MAX_FAILURE_LOG_LINES) {
+                    listener.onLog("[失败行] " + record.getTable() + " 第 " + record.getLineNo()
+                            + " 行：" + record.getErrorCode() + " " + record.getMessage());
+                } else if (count == MAX_FAILURE_LOG_LINES + 1) {
+                    listener.onLog("失败行较多，界面仅回显前 " + MAX_FAILURE_LOG_LINES + " 条，完整明细见失败日志文件");
                 }
-                table.resetProgress();
-                TableProgress progress = table.getProgress();
-                progress.start();
-                listener.onLog("开始导入 " + table.getTableName() + "（" + FileSizeUtil.formatSize(table.getSizeBytes()) + "）");
-                try {
-                    CsvMeta meta = CsvMetaReader.read(table.getFile(), options.getEncoding());
-                    if (!meta.isValid()) {
-                        throw new java.io.IOException("表头为空或解析失败");
-                    }
-                    String tableName = dialect.normalizeTableName(table.getTableName());
+            });
+            Dialect dialect = DialectFactory.get(config.getDbType());
+            // 先把"驱动参数协议是否可用"探明白，保证后面所有连接（含并发分片）都按同一口径打开
+            ProtocolCompat.detectOnce(config, listener::onLog);
+            long startedAt = System.currentTimeMillis();
 
-                    boolean missing = !dialect.tableExists(prepareConn, config.getSchema(), tableName);
-                    if (missing && options.isAutoCreateTable() && ddlMap != null
-                            && ddlMap.containsKey(table.getTableName())) {
-                        ensureSchemaExists(prepareConn, dialect, config);
-                        executeDdl(prepareConn, ddlMap.get(table.getTableName()));
-                        listener.onLog("已创建表 " + dialect.fullyQualified(config.getSchema(), tableName));
-                        missing = !dialect.tableExists(prepareConn, config.getSchema(), tableName);
-                    }
-                    if (missing) {
-                        // 目标表不存在时不要等到各分片写库报错，此处直接给出可操作原因
-                        throw new java.sql.SQLException(
-                                describeMissingTable(prepareConn, dialect, config, tableName));
-                    }
-
-                    if (options.getClearMode() != ImportOptions.ClearMode.NONE) {
-                        clearTable(prepareConn, dialect, config, tableName, options.getClearMode());
-                        listener.onLog("已清空表 " + tableName + "（" + options.getClearMode().getLabel() + "）");
-                    }
-
-                    warnOversizedTextIndex(prepareConn, config.getDbType(), config.getSchema(), tableName,
-                            listener::onLog);
-
-                    // 单表分片数：受并发线程数与单表上限约束；直接路径插入必须单会话
-                    int shardCount = options.effectiveShardCount(
-                            options.isFastMode() && dialect.fastLoadRequiresSingleSession());
-                    List<ByteRange> ranges = SplitPlanner.plan(table.getFile(), shardCount,
-                            options.getShardThresholdBytes());
-                    table.setShardCount(ranges.size());
-                    if (ranges.size() > 1) {
-                        listener.onLog("大表并行：" + table.getTableName() + " 拆分为 " + ranges.size() + " 个分片");
-                    }
-                    List<Future<Boolean>> tableFutures = new ArrayList<>(ranges.size());
-                    for (ByteRange range : ranges) {
-                        ShardImportTask task = new ShardImportTask(table, range, meta, config,
-                                dialect, options, progress, recorder, cancelled, listener::onLog);
-                        submittedTasks.add(task);
-                        tableFutures.add(currentPool.submit(task));
-                    }
-                    futures.put(table, tableFutures);
-                } catch (Exception error) {
-                    // 准备阶段失败必须立刻回滚：PostgreSQL 会把出错的事务标记为 aborted，
-                    // 不回滚的话后续所有表都会报 "current transaction is aborted"
-                    rollbackQuietly(prepareConn);
-                    progress.setStatus(TableStatus.FAILED);
-                    progress.setMessage("准备阶段失败：" + error.getMessage() + PlatformUtil.describeFileLockHint(error));
-                    progress.stop();
-                    recorder.record(table.getTableName(), 0, "PREPARE", progress.getMessage(), "");
-                    // 失败/完成文案由 onTableFinished 统一输出，避免同一张表刷两条相同的失败日志
-                    listener.onTableFinished(table);
+            pool = Executors.newFixedThreadPool(options.getThreads(), new NamedThreadFactory());
+            submittedTasks.clear();
+            currentPool = pool;
+            // 分片任务结果：主线程提交、进度 ticker 线程读取，需同步访问
+            final Map<CsvTable, List<Future<Boolean>>> futures = Collections.synchronizedMap(new LinkedHashMap<>());
+            // 已定稿（状态已落定）的表，避免重复定稿与重复回调
+            final Set<CsvTable> finalizedTables = ConcurrentHashMap.newKeySet();
+            ticker = Executors.newSingleThreadScheduledExecutor(new NamedThreadFactory("progress-ticker"));
+            ticker.scheduleAtFixedRate(new Runnable() {
+                @Override
+                public void run() {
+                    // 某张表的全部分片结束后立即定稿，不必等其它表跑完才一起汇总
+                    finalizeFinishedTables(futures, finalizedTables, cancelled, listener);
+                    listener.onTick();
                 }
-            }
-        }
+            }, 500, 500, TimeUnit.MILLISECONDS);
 
-        currentPool.shutdown();
-        if (cancelled.get()) {
-            cancelPendingFutures(futures);
-        }
-        while (!currentPool.awaitTermination(1, TimeUnit.SECONDS)) {
+            if (options.isFastMode()) {
+                listener.onLog("极速模式已开启：" + describeFastMode(dialect));
+            }
+
+            try (Connection prepareConn = ConnectionFactory.create(config)) {
+                prepareConnection = prepareConn;
+                for (CsvTable table : tables) {
+                    if (cancelled.get()) {
+                        break;
+                    }
+                    table.resetProgress();
+                    TableProgress progress = table.getProgress();
+                    progress.start();
+                    listener.onLog("开始导入 " + table.getTableName() + "（" + FileSizeUtil.formatSize(table.getSizeBytes()) + "）");
+                    try {
+                        CsvMeta meta = CsvMetaReader.read(table.getFile(), options.getEncoding());
+                        if (!meta.isValid()) {
+                            throw new java.io.IOException("表头为空或解析失败");
+                        }
+                        String tableName = dialect.normalizeTableName(table.getTableName());
+
+                        boolean missing = !dialect.tableExists(prepareConn, config.getSchema(), tableName);
+                        if (missing && options.isAutoCreateTable() && ddlMap != null
+                                && ddlMap.containsKey(table.getTableName())) {
+                            ensureSchemaExists(prepareConn, dialect, config);
+                            executeDdl(prepareConn, ddlMap.get(table.getTableName()));
+                            listener.onLog("已创建表 " + dialect.fullyQualified(config.getSchema(), tableName));
+                            missing = !dialect.tableExists(prepareConn, config.getSchema(), tableName);
+                        }
+                        if (missing) {
+                            // 目标表不存在时不要等到各分片写库报错，此处直接给出可操作原因
+                            throw new java.sql.SQLException(
+                                    describeMissingTable(prepareConn, dialect, config, tableName));
+                        }
+
+                        if (options.getClearMode() != ImportOptions.ClearMode.NONE) {
+                            clearTable(prepareConn, dialect, config, tableName, options.getClearMode());
+                            listener.onLog("已清空表 " + tableName + "（" + options.getClearMode().getLabel() + "）");
+                        }
+
+                        warnOversizedTextIndex(prepareConn, config.getDbType(), config.getSchema(), tableName,
+                                listener::onLog);
+
+                        // 单表分片数：受并发线程数与单表上限约束；直接路径插入必须单会话
+                        int shardCount = options.effectiveShardCount(
+                                options.isFastMode() && dialect.fastLoadRequiresSingleSession());
+                        List<ByteRange> ranges = SplitPlanner.plan(table.getFile(), shardCount,
+                                options.getShardThresholdBytes());
+                        table.setShardCount(ranges.size());
+                        if (ranges.size() > 1) {
+                            listener.onLog("大表并行：" + table.getTableName() + " 拆分为 " + ranges.size() + " 个分片");
+                        }
+                        List<Future<Boolean>> tableFutures = new ArrayList<>(ranges.size());
+                        for (ByteRange range : ranges) {
+                            if (cancelled.get()) {
+                                break;
+                            }
+                            ShardImportTask task = new ShardImportTask(table, range, meta, config,
+                                    dialect, options, progress, recorder, cancelled, listener::onLog);
+                            submittedTasks.add(task);
+                            try {
+                                tableFutures.add(currentPool.submit(task));
+                            } catch (RejectedExecutionException error) {
+                                if (!cancelled.get()) {
+                                    throw error;
+                                }
+                                break;
+                            }
+                        }
+                        futures.put(table, tableFutures);
+                        if (tableFutures.isEmpty() && cancelled.get()) {
+                            progress.setStatus(TableStatus.CANCELLED);
+                            progress.setMessage("已取消");
+                            progress.stop();
+                            listener.onTableFinished(table);
+                        }
+                    } catch (Exception error) {
+                        // 准备阶段失败必须立刻回滚：PostgreSQL 会把出错的事务标记为 aborted，
+                        // 不回滚的话后续所有表都会报 "current transaction is aborted"
+                        rollbackQuietly(prepareConn);
+                        progress.setStatus(cancelled.get() ? TableStatus.CANCELLED : TableStatus.FAILED);
+                        progress.setMessage(cancelled.get() ? "已取消"
+                                : "准备阶段失败：" + error.getMessage() + PlatformUtil.describeFileLockHint(error));
+                        progress.stop();
+                        recorder.record(table.getTableName(), 0, "PREPARE", progress.getMessage(), "");
+                        // 失败/完成文案由 onTableFinished 统一输出，避免同一张表刷两条相同的失败日志
+                        listener.onTableFinished(table);
+                    }
+                }
+            } finally {
+                prepareConnection = null;
+            }
+
+            currentPool.shutdown();
             if (cancelled.get()) {
-                currentPool.shutdownNow();
-                break;
+                cancelQueuedTasks(currentPool);
             }
-        }
-        ticker.shutdownNow();
+            awaitWorkers(currentPool);
+            ticker.shutdownNow();
+            awaitWorkers(ticker);
 
-        summarize(tables, futures, result, recorder);
-        result.setElapsedMs(System.currentTimeMillis() - startedAt);
-        result.setCancelled(cancelled.get());
+            finalizeFinishedTables(futures, finalizedTables, cancelled, listener);
+            summarize(tables, futures, result, recorder);
+            result.setElapsedMs(System.currentTimeMillis() - startedAt);
+            result.setCancelled(cancelled.get());
 
-        File failureLog = recorder.closeSink();
-        if (failureLog != null) {
-            result.setFailureLogFile(failureLog.getAbsolutePath());
-            listener.onLog("失败明细已写入文件：" + failureLog.getAbsolutePath());
-        } else if (recorder.getTotalCount() > 0) {
-            listener.onLog("失败明细共 " + recorder.getTotalCount() + " 条（内存保留，可点「导出失败明细」保存）");
+            File failureLog = recorder.closeSink();
+            if (failureLog != null) {
+                result.setFailureLogFile(failureLog.getAbsolutePath());
+                listener.onLog("失败明细已写入文件：" + failureLog.getAbsolutePath());
+            } else if (recorder.getTotalCount() > 0) {
+                listener.onLog("失败明细共 " + recorder.getTotalCount() + " 条（内存保留，可点「导出失败明细」保存）");
+            }
+            listener.onTick();
+            listener.onAllFinished(result);
+            return result;
+        } finally {
+            if (currentPool != null && !currentPool.isTerminated()) {
+                cancel();
+                awaitWorkers(currentPool);
+            }
+            if (ticker != null) {
+                ticker.shutdownNow();
+                awaitWorkers(ticker);
+            }
+            recorder.close();
+            submittedTasks.clear();
+            pool = null;
         }
-        listener.onTick();
-        listener.onAllFinished(result);
-        return result;
     }
 
     /** 极速模式说明文案 */
@@ -356,7 +393,7 @@ public final class ImportEngine {
         if (cancelled.get() && progress.getStatus() == TableStatus.RUNNING) {
             progress.setStatus(TableStatus.CANCELLED);
             progress.setMessage("已取消");
-        } else if (ok) {
+        } else if (ok && progress.getFailedRows() == 0) {
             progress.setStatus(TableStatus.SUCCESS);
             if (progress.getMessage() == null || progress.getMessage().isEmpty()) {
                 progress.setMessage("");
@@ -365,6 +402,8 @@ public final class ImportEngine {
             progress.setStatus(TableStatus.FAILED);
             if (!error.isEmpty()) {
                 progress.setMessage(error);
+            } else if (progress.getFailedRows() > 0 && progress.getMessage().isEmpty()) {
+                progress.setMessage("存在 " + progress.getFailedRows() + " 行导入失败，请查看失败明细");
             }
         }
         progress.stop();
@@ -424,7 +463,7 @@ public final class ImportEngine {
                     if (progress.getMessage() == null || progress.getMessage().isEmpty()) {
                         progress.setMessage("已取消");
                     }
-                } else if (ok) {
+                } else if (ok && progress.getFailedRows() == 0) {
                     progress.setStatus(TableStatus.SUCCESS);
                     if (progress.getMessage() == null || progress.getMessage().isEmpty()) {
                         progress.setMessage("");
@@ -433,6 +472,8 @@ public final class ImportEngine {
                     progress.setStatus(TableStatus.FAILED);
                     if (!error.isEmpty()) {
                         progress.setMessage(error);
+                    } else if (progress.getFailedRows() > 0 && progress.getMessage().isEmpty()) {
+                        progress.setMessage("存在 " + progress.getFailedRows() + " 行导入失败，请查看失败明细");
                     }
                 }
             }
@@ -457,15 +498,27 @@ public final class ImportEngine {
     }
 
     /** 取消时清理线程池队列中的任务，避免汇总阶段无限等待未执行的 Future。 */
-    private void cancelPendingFutures(Map<CsvTable, List<Future<Boolean>>> futures) {
-        synchronized (futures) {
-            for (List<Future<Boolean>> tableFutures : futures.values()) {
-                for (Future<Boolean> future : tableFutures) {
-                    if (!future.isDone()) {
-                        future.cancel(false);
-                    }
-                }
+    private static void cancelQueuedTasks(ExecutorService executor) {
+        for (Runnable queued : executor.shutdownNow()) {
+            if (queued instanceof Future<?> future) {
+                future.cancel(false);
             }
+        }
+    }
+
+    /** 汇总前等待实际退出；线程中断时先取消任务，收尾后恢复中断标记。 */
+    private void awaitWorkers(ExecutorService executor) {
+        boolean interrupted = false;
+        while (!executor.isTerminated()) {
+            try {
+                executor.awaitTermination(1, TimeUnit.SECONDS);
+            } catch (InterruptedException error) {
+                interrupted = true;
+                cancel();
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
         }
     }
 

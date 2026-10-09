@@ -1,5 +1,7 @@
 package com.moral.model;
 
+import org.apache.commons.csv.CSVFormat;
+
 /**
  * 一条导入失败明细。
  */
@@ -39,10 +41,9 @@ public class FailureRecord {
         return rawLine;
     }
 
-    /** 导出为单行文本（制表符分隔） */
+    /** 导出标准 TSV 记录，原始 CSV 中的换行、制表符和引号无损保留。 */
     public String toLine() {
-        return table + "\t" + lineNo + "\t" + errorCode + "\t"
-                + oneLine(message, 500) + "\t" + oneLine(rawLine, 2000);
+        return CSVFormat.TDF.format(table, lineNo, errorCode, oneLine(message, 500), rawLine);
     }
 
     private static String oneLine(String text, int maxLength) {

@@ -39,7 +39,7 @@ import java.util.function.Consumer;
  *   <li>PostgreSQL / 人大金仓：走 COPY FROM STDIN，由服务端直接解析 CSV，速度可提升数倍；</li>
  *   <li>MySQL：走 LOAD DATA LOCAL INFILE，同样由服务端解析；</li>
  *   <li>Oracle/达梦：走 {@code INSERT /*+ APPEND *}{@code /} 直接路径插入（单分片）；</li>
- *   <li>两者失败时都会自动回滚并降级为标准 INSERT 批量写入，保证不丢数据。</li>
+ *   <li>仅确认未提交且回滚成功时允许降级；提交结果不明确时停止并提示核对数据。</li>
  * </ul>
  */
 public class ShardImportTask implements Callable<Boolean> {
@@ -68,6 +68,8 @@ public class ShardImportTask implements Callable<Boolean> {
     private volatile BatchingWriter activeWriter;
     /** 批量加载通道（LOAD DATA）执行中的 Statement，用于超时时主动取消 */
     private volatile Statement activeStreamStatement;
+    /** 连接级终止可中断 COPY 和提交阶段的阻塞。 */
+    private volatile Connection activeConnection;
     /** 已同步到进度对象的成功/失败行数基线（保证运行中也能看到实时行数） */
     private long syncedSuccessRows;
     private long syncedFailedRows;
@@ -118,7 +120,15 @@ public class ShardImportTask implements Callable<Boolean> {
         Connection conn = null;
         Thread watchdog = startWatchdog();
         try {
+            if (cancelled.get()) {
+                return false;
+            }
             conn = ConnectionFactory.create(config, options.getWriteTimeoutSeconds());
+            activeConnection = conn;
+            lastActivityAt = System.currentTimeMillis();
+            if (cancelled.get()) {
+                return false;
+            }
             if (options.isFastMode() && dialect.supportsFastLoad()) {
                 resetAttempt();
                 Boolean fastResult = fastLoad(conn);
@@ -154,8 +164,10 @@ public class ShardImportTask implements Callable<Boolean> {
             return false;
         } finally {
             finished = true;
+            syncCounters(activeWriter);
             activeWriter = null;
             activeStreamStatement = null;
+            activeConnection = null;
             if (watchdog != null) {
                 watchdog.interrupt();
             }
@@ -216,13 +228,11 @@ public class ShardImportTask implements Callable<Boolean> {
         message.append(" —— 若长时间不变，请检查目标库锁等待与资源，或点「停止」中断");
         log(message.toString());
         maybeCancelStalledBatch(writer);
-        lastActivityAt = System.currentTimeMillis();
     }
 
     /**
      * 当前批次执行/提交超过写入超时且仍无响应时，主动取消该批次。
-     * 取消后 JDBC 会抛出"取消/超时"类错误，BatchingWriter 会强制上抛，
-     * 从而让极速模式走降级路径、标准模式快速标记失败，而不是一直挂在"提交中"。
+     * 终止连接后不自动重放，避免提交阶段中断导致结果不明确时重复写入。
      */
     private void maybeCancelStalledBatch(BatchingWriter writer) {
         if (writeTimeoutMillis <= 0) {
@@ -230,20 +240,15 @@ public class ShardImportTask implements Callable<Boolean> {
         }
         if (writer == null) {
             // 批量加载通道（COPY / LOAD DATA）：没有 BatchingWriter，按最近一次进展时间判断
-            Statement streamStatement = activeStreamStatement;
-            if (streamStatement == null || System.currentTimeMillis() - lastActivityAt < writeTimeoutMillis) {
+            if (activeConnection == null || System.currentTimeMillis() - lastActivityAt < writeTimeoutMillis) {
                 return;
             }
             if (!autoCancelled.compareAndSet(false, true)) {
                 return;
             }
             log("[中断] " + tableLabel + "：批量加载已 " + (writeTimeoutMillis / 1000)
-                    + " 秒无响应，已自动取消；该表改用标准写入重试");
-            try {
-                streamStatement.cancel();
-            } catch (SQLException ignore) {
-                // 语句已结束或驱动不支持取消，忽略
-            }
+                    + " 秒无响应，正在终止连接；请核对目标数据后重试");
+            ConnectionFactory.abortQuietly(activeConnection);
             return;
         }
         if (!writer.isFlushing()) {
@@ -261,8 +266,8 @@ public class ShardImportTask implements Callable<Boolean> {
             return;
         }
         log("[中断] " + tableLabel + "：当前批次已 " + (elapsed / 1000) + " 秒无响应"
-                + "（写入超时 " + (writeTimeoutMillis / 1000) + " 秒），已自动取消；"
-                + "极速模式下将自动降级为标准写入，标准模式下该表标记失败");
+                + "（写入超时 " + (writeTimeoutMillis / 1000) + " 秒），正在终止连接，请核对目标数据后重试");
+        ConnectionFactory.abortQuietly(activeConnection);
         writer.cancelCurrent();
     }
 
@@ -274,6 +279,8 @@ public class ShardImportTask implements Callable<Boolean> {
      */
     private void resetAttempt() {
         attemptBytes = 0;
+        autoCancelled.set(false);
+        lastActivityAt = System.currentTimeMillis();
         progress.reportBytes(range.getIndex(), 0);
     }
 
@@ -327,9 +334,13 @@ public class ShardImportTask implements Callable<Boolean> {
                     },
                     cancelled::get);
         } catch (SQLException error) {
-            rollback(conn);
+            // 回滚未确认或超时已终止连接时，不允许从头重试。
+            conn.rollback();
             if (cancelled.get()) {
                 return false;
+            }
+            if (autoCancelled.get()) {
+                throw error;
             }
             log("[降级] " + tableLabel + "：极速模式(COPY)失败，改用标准模式重试：" + brief(error.getMessage())
                     + carriageReturnHint(error));
@@ -338,6 +349,9 @@ public class ShardImportTask implements Callable<Boolean> {
         if (cancelled.get()) {
             rollback(conn);
             return false;
+        }
+        if (autoCancelled.get()) {
+            throw new SQLException("批量加载超时，连接已终止，请核对目标数据", "57014");
         }
         conn.commit();
         progress.addRows(written);
@@ -379,9 +393,12 @@ public class ShardImportTask implements Callable<Boolean> {
                     cancelled::get,
                     statement -> activeStreamStatement = statement);
         } catch (SQLException error) {
-            rollback(conn);
+            conn.rollback();
             if (cancelled.get()) {
                 return false;
+            }
+            if (autoCancelled.get()) {
+                throw error;
             }
             log("[降级] " + tableLabel + "：极速模式(LOAD DATA)失败，改用标准模式重试：" + brief(error.getMessage()));
             return null;
@@ -399,6 +416,9 @@ public class ShardImportTask implements Callable<Boolean> {
             rollback(conn);
             return false;
         }
+        if (autoCancelled.get()) {
+            throw new SQLException("批量加载超时，连接已终止，请核对目标数据", "57014");
+        }
         conn.commit();
         progress.addRows(written);
         progress.addSuccess(written);
@@ -412,16 +432,10 @@ public class ShardImportTask implements Callable<Boolean> {
         try (PreparedStatement statement = conn.prepareStatement(fastInsertSql)) {
             writer = newWriter(conn, statement);
             runRows(writer);
-            conn.commit();
-            syncCounters(writer);
-            return true;
+            return !cancelled.get();
         } catch (SQLException error) {
-            rollback(conn);
-            long alreadyCommitted = writer == null ? 0 : writer.getSuccessRows();
-            if (writer != null) {
-                syncCounters(writer);
-            }
-            if (alreadyCommitted == 0 && !cancelled.get()) {
+            conn.rollback();
+            if ((writer == null || writer.canRetryFromStart()) && !cancelled.get() && !autoCancelled.get()) {
                 log("[降级] " + tableLabel + "：极速模式(" + dialect.type().getDisplayName()
                         + " 直接路径插入)不可用，改用标准模式重试：" + brief(error.getMessage()));
                 return null;
@@ -434,6 +448,8 @@ public class ShardImportTask implements Callable<Boolean> {
             progress.setMessage(message);
             log("[失败] " + tableLabel + "：" + message);
             return false;
+        } finally {
+            syncCounters(writer);
         }
     }
 
@@ -450,12 +466,11 @@ public class ShardImportTask implements Callable<Boolean> {
     // ==================== 标准批量写入 ====================
 
     private boolean standardLoad(Connection conn, String sql) throws SQLException, IOException {
+        BatchingWriter writer = null;
         try (PreparedStatement statement = conn.prepareStatement(sql)) {
-            BatchingWriter writer = newWriter(conn, statement);
+            writer = newWriter(conn, statement);
             runRows(writer);
-            conn.commit();
-            syncCounters(writer);
-            return true;
+            return !cancelled.get();
         } catch (SQLException error) {
             rollback(conn);
             String message = SqlErrors.isCancelOrTimeout(error)
@@ -466,22 +481,21 @@ public class ShardImportTask implements Callable<Boolean> {
             progress.setMessage(message);
             log("[失败] " + tableLabel + "：" + message);
             return false;
+        } finally {
+            syncCounters(writer);
         }
     }
 
     /** 中断当前挂起的数据库执行（停止导入时由引擎调用） */
     public void cancelDatabaseWork() {
+        ConnectionFactory.abortQuietly(activeConnection);
         BatchingWriter writer = activeWriter;
         if (writer != null) {
             writer.cancelCurrent();
         }
         Statement streamStatement = activeStreamStatement;
         if (streamStatement != null) {
-            try {
-                streamStatement.cancel();
-            } catch (SQLException ignore) {
-                // 语句已结束或驱动不支持取消
-            }
+            ConnectionFactory.cancelQuietly(streamStatement);
         }
     }
 
@@ -536,14 +550,15 @@ public class ShardImportTask implements Callable<Boolean> {
             CSVRecord record;
             while ((record = reader.next()) != null) {
                 if (cancelled.get()) {
-                    break;
+                    writer.cancelCurrent();
+                    throw new SQLException("导入已取消", "57014");
                 }
                 if (record.size() != columnCount) {
                     // 结构性坏行：字段数与表头对不上。绝大多数情况是源文件里有未加引号的裸回车符（0x0D 后不跟 0x0A），
                     // 把一行拆成了两行，后半行少了前面若干列（15 + 13 = 27 这类组合）。
                     // 这里必须拦住：若照常按位置绑定，后半行的值会整体左移写进前面的列。
                     writer.skipMalformedRow(record.getRecordNumber(), describeMalformedRow(record, columnCount),
-                            CsvMetaReader.valuesOf(record, columnCount));
+                            CsvMetaReader.valuesOf(record, record.size()));
                     malformedRows++;
                     rows++;
                     continue;
@@ -563,6 +578,10 @@ public class ShardImportTask implements Callable<Boolean> {
             reportBytes(reader.bytesRead() - reportedBytes);
             progress.addRows(rows - reportedRows);
             sanitized = reader.sanitizedCount();
+        }
+        if (cancelled.get()) {
+            writer.cancelCurrent();
+            throw new SQLException("导入已取消", "57014");
         }
         writer.flush();
         syncCounters(writer);

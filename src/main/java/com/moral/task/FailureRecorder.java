@@ -6,6 +6,7 @@ import java.io.BufferedWriter;
 import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.time.LocalDateTime;
@@ -26,6 +27,8 @@ public final class FailureRecorder implements Closeable {
 
     private final List<FailureRecord> records = Collections.synchronizedList(new ArrayList<>());
     private volatile long totalCount;
+    /** 内存最多保留约 1600 万字符，完整数据始终写入磁盘。 */
+    private long retainedCharacters;
     private volatile Consumer<FailureRecord> listener;
 
     private BufferedWriter sink;
@@ -80,11 +83,18 @@ public final class FailureRecorder implements Closeable {
         this.listener = listener;
     }
 
-    public void record(String table, long lineNo, String errorCode, String message, String rawLine) {
+    public synchronized void record(String table, long lineNo, String errorCode, String message, String rawLine) {
         FailureRecord record = new FailureRecord(table, lineNo, errorCode, message, rawLine);
         totalCount++;
-        if (records.size() < MAX_RECORDS) {
+        int characters = rawLine == null ? 0 : rawLine.length();
+        boolean retain = records.size() < MAX_RECORDS
+                && retainedCharacters + characters <= 16L * 1024 * 1024;
+        if (!retain && sink == null) {
+            throw new IllegalStateException("失败明细未能保存：日志不可用且内存已达到上限，请停止并检查日志目录");
+        }
+        if (retain) {
             records.add(record);
+            retainedCharacters += characters;
         }
         writeToSink(record);
         Consumer<FailureRecord> current = listener;
@@ -111,8 +121,8 @@ public final class FailureRecorder implements Closeable {
                 sink.newLine();
                 sink.flush();
                 sinkWrites++;
-            } catch (IOException ignore) {
-                // 日志写入失败不影响导入
+            } catch (IOException error) {
+                throw new UncheckedIOException("失败明细写入失败，请检查磁盘空间和日志目录权限", error);
             }
         }
     }
