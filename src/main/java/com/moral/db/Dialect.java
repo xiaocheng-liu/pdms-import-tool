@@ -65,6 +65,19 @@ public interface Dialect {
     boolean tableExists(Connection conn, String schema, String table) throws SQLException;
 
     /**
+     * {@link #tableExists} 判定不存在时，返回同名表实际所在的其它 schema（最多若干条）。
+     *
+     * <p>用于区分"整个库都没有这张表"与"表在某处、只是不在写入目标 schema 下"：
+     * 后者是 schema 填错导致的典型症状——存在性检查如果把范围放松到任意 schema，
+     * 会误报"表结构完整"，实际写入时却报 {@code 关系 xxx.yyy 不存在}。
+     * 纯诊断用途，默认返回空列表。
+     */
+    default List<String> findTableInOtherSchemas(Connection conn, String schema, String table)
+            throws SQLException {
+        return Collections.emptyList();
+    }
+
+    /**
      * 目标 schema 不存在时的自动创建语句（如 PostgreSQL 的 {@code CREATE SCHEMA IF NOT EXISTS}）。
      * 返回 null 表示该库不需要或不支持在此自动创建（Oracle、达梦的 schema 即用户，无法自动创建）。
      */

@@ -60,10 +60,22 @@ public final class ConnectionFactory {
             props.setProperty("oracle.net.READ_TIMEOUT", String.valueOf(networkMillis));
         }
         DriverManager.setLoginTimeout(LOGIN_TIMEOUT);
-        Connection conn = DriverManager.getConnection(dialect.buildUrl(cfg), props);
+        Connection conn = DriverManager.getConnection(withCompatParams(dialect.buildUrl(cfg), cfg), props);
         conn.setAutoCommit(false);
         applyNetworkTimeout(conn, networkMillis);
         return conn;
+    }
+
+    /**
+     * 在 JDBC URL 上追加兼容性参数（由 {@link ProtocolCompat} 按目标库探测结论给出）。
+     * 兼容参数为空时原样返回，保证正常环境的 URL 与之前完全一致。
+     */
+    private static String withCompatParams(String url, ConnectionConfig cfg) {
+        String params = ProtocolCompat.urlParams(cfg);
+        if (params.isEmpty()) {
+            return url;
+        }
+        return url + (url.contains("?") ? "&" : "?") + params;
     }
 
     /**

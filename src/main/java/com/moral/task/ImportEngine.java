@@ -8,6 +8,7 @@ import com.moral.csv.SplitPlanner;
 import com.moral.db.ConnectionFactory;
 import com.moral.db.Dialect;
 import com.moral.db.DialectFactory;
+import com.moral.db.ProtocolCompat;
 import com.moral.model.ConnectionConfig;
 import com.moral.model.CsvTable;
 import com.moral.model.DbType;
@@ -84,8 +85,22 @@ public final class ImportEngine {
     public Map<String, String> generateMissingDdl(List<CsvTable> tables,
                                                   ConnectionConfig config,
                                                   ImportOptions options) throws Exception {
+        // 无日志出口的场景（命令行调用等）静默处理
+        return generateMissingDdl(tables, config, options, message -> { });
+    }
+
+    /**
+     * @param logger 诊断信息出口，用于在不存在 DNS 级别异常但配置可疑时给出提示
+     *               （例如同名表在其它 schema 下存在，目标 schema 可能填错）
+     */
+    public Map<String, String> generateMissingDdl(List<CsvTable> tables,
+                                                  ConnectionConfig config,
+                                                  ImportOptions options,
+                                                  Consumer<String> logger) throws Exception {
         Map<String, String> ddlMap = new LinkedHashMap<>();
         Dialect dialect = DialectFactory.get(config.getDbType());
+        ProtocolCompat.detectOnce(config, logger);
+        int failedChecks = 0;
         try (Connection conn = ConnectionFactory.create(config)) {
             for (CsvTable table : tables) {
                 try {
@@ -93,16 +108,24 @@ public final class ImportEngine {
                     if (dialect.tableExists(conn, config.getSchema(), tableName)) {
                         continue;
                     }
+                    reportMissingTableLocation(conn, dialect, config, tableName, logger);
                     CsvMeta meta = CsvMetaReader.read(table.getFile(), options.getEncoding());
                     if (!meta.isValid()) {
                         continue;
                     }
                     ddlMap.put(table.getTableName(), DdlBuilder.build(dialect, config.getSchema(), tableName, meta));
                 } catch (Exception error) {
+                    failedChecks++;
+                    logger.accept("[警告] 检查表 " + table.getTableName() + " 失败：" + error.getMessage());
                     // 单表元数据/采样失败只跳过该表；回滚避免 PostgreSQL 事务被标记为 aborted
                     rollbackQuietly(conn);
                 }
             }
+        }
+        if (failedChecks > 0 && ddlMap.isEmpty()) {
+            // 关键：检查阶段整体失败时不能让上层把"没有生成任何建表语句"误读成"表结构完整"
+            logger.accept("[警告] " + failedChecks + " 张表的存在性检查失败，本次并未确认目标表是否存在；"
+                    + "若确实缺表，导入时会在写入前直接报出原因");
         }
         return ddlMap;
     }
@@ -139,6 +162,8 @@ public final class ImportEngine {
             }
         });
         Dialect dialect = DialectFactory.get(config.getDbType());
+        // 先把"驱动参数协议是否可用"探明白，保证后面所有连接（含并发分片）都按同一口径打开
+        ProtocolCompat.detectOnce(config, listener::onLog);
         long startedAt = System.currentTimeMillis();
 
         pool = Executors.newFixedThreadPool(options.getThreads(), new NamedThreadFactory());
@@ -177,11 +202,18 @@ public final class ImportEngine {
                     }
                     String tableName = dialect.normalizeTableName(table.getTableName());
 
-                    if (options.isAutoCreateTable() && ddlMap != null && ddlMap.containsKey(table.getTableName())
-                            && !dialect.tableExists(prepareConn, config.getSchema(), tableName)) {
+                    boolean missing = !dialect.tableExists(prepareConn, config.getSchema(), tableName);
+                    if (missing && options.isAutoCreateTable() && ddlMap != null
+                            && ddlMap.containsKey(table.getTableName())) {
                         ensureSchemaExists(prepareConn, dialect, config);
                         executeDdl(prepareConn, ddlMap.get(table.getTableName()));
                         listener.onLog("已创建表 " + dialect.fullyQualified(config.getSchema(), tableName));
+                        missing = !dialect.tableExists(prepareConn, config.getSchema(), tableName);
+                    }
+                    if (missing) {
+                        // 目标表不存在时不要等到各分片写库报错，此处直接给出可操作原因
+                        throw new java.sql.SQLException(
+                                describeMissingTable(prepareConn, dialect, config, tableName));
                     }
 
                     if (options.getClearMode() != ImportOptions.ClearMode.NONE) {
@@ -217,7 +249,7 @@ public final class ImportEngine {
                     progress.setMessage("准备阶段失败：" + error.getMessage() + PlatformUtil.describeFileLockHint(error));
                     progress.stop();
                     recorder.record(table.getTableName(), 0, "PREPARE", progress.getMessage(), "");
-                    listener.onLog("[失败] " + table.getTableName() + "：" + progress.getMessage());
+                    // 失败/完成文案由 onTableFinished 统一输出，避免同一张表刷两条相同的失败日志
                     listener.onTableFinished(table);
                 }
             }
@@ -232,7 +264,7 @@ public final class ImportEngine {
         }
         ticker.shutdownNow();
 
-        summarize(futures, result, recorder, options);
+        summarize(tables, futures, result, recorder);
         result.setElapsedMs(System.currentTimeMillis() - startedAt);
         result.setCancelled(cancelled.get());
 
@@ -330,53 +362,67 @@ public final class ImportEngine {
         listener.onTableFinished(table);
     }
 
-    private void summarize(Map<CsvTable, List<Future<Boolean>>> futures,
+    /**
+     * 汇总统计。
+     *
+     * <p>必须遍历「本次要导入的全部表」而不是只看已提交的分片：准备阶段就失败的表
+     * （目标表不存在、CSV 解析失败等）根本没进 futures，若只统计 futures 就会出现
+     * "共 2 张表，成功 0 张，失败 0 张"这种总数对不上的结果。
+     */
+    private void summarize(List<CsvTable> tables,
+                           Map<CsvTable, List<Future<Boolean>>> futures,
                            ImportResult result,
-                           FailureRecorder recorder,
-                           ImportOptions options) {
+                           FailureRecorder recorder) {
         int successTables = 0;
         int failedTables = 0;
         long successRows = 0;
         long failedRows = 0;
 
-        for (Map.Entry<CsvTable, List<Future<Boolean>>> entry : futures.entrySet()) {
-            CsvTable table = entry.getKey();
+        for (CsvTable table : tables) {
             TableProgress progress = table.getProgress();
-            boolean ok = true;
-            String error = "";
-            for (Future<Boolean> future : entry.getValue()) {
-                try {
-                    Boolean value = future.get();
-                    if (value == null || !value) {
+            // 取消过早而未启动的表保持「待导入」，不参与统计
+            if (progress.getStatus() == TableStatus.PENDING) {
+                continue;
+            }
+            List<Future<Boolean>> tableFutures = futures.get(table);
+            if (tableFutures != null && !tableFutures.isEmpty()) {
+                boolean ok = true;
+                String error = "";
+                for (Future<Boolean> future : tableFutures) {
+                    try {
+                        Boolean value = future.get();
+                        if (value == null || !value) {
+                            ok = false;
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
                         ok = false;
+                    } catch (Exception e) {
+                        ok = false;
+                        Throwable cause = e.getCause() == null ? e : e.getCause();
+                        error = String.valueOf(cause.getMessage());
                     }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    ok = false;
-                } catch (Exception e) {
-                    ok = false;
-                    Throwable cause = e.getCause() == null ? e : e.getCause();
-                    error = String.valueOf(cause.getMessage());
+                }
+                // 已定稿为「已取消」的表不再改判为失败
+                if (cancelled.get()
+                        && (progress.getStatus() == TableStatus.RUNNING || progress.getStatus() == TableStatus.CANCELLED)) {
+                    progress.setStatus(TableStatus.CANCELLED);
+                    if (progress.getMessage() == null || progress.getMessage().isEmpty()) {
+                        progress.setMessage("已取消");
+                    }
+                } else if (ok) {
+                    progress.setStatus(TableStatus.SUCCESS);
+                    if (progress.getMessage() == null || progress.getMessage().isEmpty()) {
+                        progress.setMessage("");
+                    }
+                } else {
+                    progress.setStatus(TableStatus.FAILED);
+                    if (!error.isEmpty()) {
+                        progress.setMessage(error);
+                    }
                 }
             }
-            // 已定稿为「已取消」的表不再改判为失败
-            if (cancelled.get()
-                    && (progress.getStatus() == TableStatus.RUNNING || progress.getStatus() == TableStatus.CANCELLED)) {
-                progress.setStatus(TableStatus.CANCELLED);
-                if (progress.getMessage() == null || progress.getMessage().isEmpty()) {
-                    progress.setMessage("已取消");
-                }
-            } else if (ok) {
-                progress.setStatus(TableStatus.SUCCESS);
-                if (progress.getMessage() == null || progress.getMessage().isEmpty()) {
-                    progress.setMessage("");
-                }
-            } else {
-                progress.setStatus(TableStatus.FAILED);
-                if (!error.isEmpty()) {
-                    progress.setMessage(error);
-                }
-            }
+            // 其余情况沿用准备阶段已定稿的状态（失败并保持当时的原因）
             progress.stop();
             successRows += progress.getSuccessRows();
             failedRows += progress.getFailedRows();
@@ -443,6 +489,47 @@ public final class ImportEngine {
     }
 
     /**
+     * 目标表不存在时的提示语：区分"整库都没有这张表"与"表在某处、只是不在写入目标 schema 下"。
+     * 后者是本次故障的典型形态——界面 schema 填了 A，表实际建在 B，存在性检查稍放宽就会
+     * 先报"表结构完整"，再在写库时报 {@code 关系 A.t 不存在}，排查成本很高。
+     */
+    private static String describeMissingTable(Connection conn, Dialect dialect,
+                                               ConnectionConfig config, String tableName) {
+        StringBuilder text = new StringBuilder("目标表 ")
+                .append(dialect.fullyQualified(config.getSchema(), tableName)).append(" 不存在");
+        List<String> otherSchemas = Collections.emptyList();
+        try {
+            otherSchemas = dialect.findTableInOtherSchemas(conn, config.getSchema(), tableName);
+        } catch (SQLException ignore) {
+            // 诊断失败不影响主流程
+        }
+        if (otherSchemas.isEmpty()) {
+            text.append("：请确认「Schema」配置是否正确，或勾选「表不存在时自动建表」由工具创建");
+        } else {
+            text.append("：同名表存在于 ").append(String.join("、", otherSchemas))
+                    .append("，当前目标是 ").append(config.getSchema())
+                    .append("；若这些表就是要写入的表，请把「Schema」改成其中之一，"
+                            + "否则勾选「表不存在时自动建表」在目标 schema 下新建");
+        }
+        return text.toString();
+    }
+
+    /** 生成缺失表 DDL 前的提示：把同名表实际所在 schema 说出来，便于及时发现 schema 填错 */
+    private static void reportMissingTableLocation(Connection conn, Dialect dialect, ConnectionConfig config,
+                                                   String tableName, Consumer<String> logger) {
+        try {
+            List<String> otherSchemas = dialect.findTableInOtherSchemas(conn, config.getSchema(), tableName);
+            if (!otherSchemas.isEmpty()) {
+                logger.accept("[警告] " + tableName + " 在目标 schema " + config.getSchema()
+                        + " 下不存在，但同名表存在于 " + String.join("、", otherSchemas)
+                        + "；若「Schema」填写有误请改正，否则将新建 " + config.getSchema() + "." + tableName);
+            }
+        } catch (SQLException ignore) {
+            // 诊断失败不影响主流程
+        }
+    }
+
+    /**
      * 导入前预检：PostgreSQL / 金仓的 btree 索引单条目上限约 2704 字节，
      * 长文本列（text、varchar(n>2704)）上建普通 btree 索引时，插入整篇 HTML 之类的长值会直接报
      * SQLSTATE 54000（program_limit_exceeded），且是整批失败、日志里只能看到被 SQL 回显淹没的消息。
@@ -453,15 +540,16 @@ public final class ImportEngine {
         if (type != DbType.POSTGRESQL && type != DbType.KINGBASE) {
             return;
         }
+        // 统一加 pg_catalog 前缀：金仓部分模式（Oracle 兼容 / search_path 未含系统 schema）下裸表名不可用
         String sql = "SELECT c.relname, a.attname "
-                + "FROM pg_class tbl "
-                + "JOIN pg_namespace n ON n.oid = tbl.relnamespace "
-                + "JOIN pg_index idx ON idx.indrelid = tbl.oid "
-                + "JOIN pg_class c ON c.oid = idx.indexrelid "
-                + "JOIN pg_am am ON am.oid = c.relam "
-                + "JOIN pg_attribute a ON a.attrelid = tbl.oid AND a.attnum = ANY(idx.indkey) "
-                + "JOIN pg_type t ON t.oid = a.atttypid "
-                + "WHERE n.nspname = ? AND tbl.relname = ? AND am.amname = 'btree' AND idx.indisvalid "
+                + "FROM pg_catalog.pg_class tbl "
+                + "JOIN pg_catalog.pg_namespace n ON n.oid = tbl.relnamespace "
+                + "JOIN pg_catalog.pg_index idx ON idx.indrelid = tbl.oid "
+                + "JOIN pg_catalog.pg_class c ON c.oid = idx.indexrelid "
+                + "JOIN pg_catalog.pg_am am ON am.oid = c.relam "
+                + "JOIN pg_catalog.pg_attribute a ON a.attrelid = tbl.oid AND a.attnum = ANY(idx.indkey) "
+                + "JOIN pg_catalog.pg_type t ON t.oid = a.atttypid "
+                + "WHERE n.nspname::text = ? AND tbl.relname::text = ? AND am.amname = 'btree' AND idx.indisvalid "
                 + "AND t.typname IN ('varchar', 'bpchar', 'text') "
                 + "AND (a.atttypmod < 0 OR a.atttypmod - 4 > 2704)";
         try (PreparedStatement statement = conn.prepareStatement(sql)) {
@@ -476,7 +564,8 @@ public final class ImportEngine {
                 }
             }
         } catch (SQLException ignore) {
-            // 预检失败（版本差异、权限不足等）不影响导入；PG 事务已标记 aborted 时必须回滚
+            // 预检失败（版本差异、权限不足等）不影响导入；
+            // PG 系数据库已把事务标记为 aborted，必须回滚，否则这张表后续的清表/写入会报"当前事务被终止"
             rollbackQuietly(conn);
         }
     }

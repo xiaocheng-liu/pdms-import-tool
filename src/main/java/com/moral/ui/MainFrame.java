@@ -329,7 +329,8 @@ public class MainFrame extends JFrame {
         new SwingWorker<Map<String, String>, Void>() {
             @Override
             protected Map<String, String> doInBackground() throws Exception {
-                return engine.generateMissingDdl(selected, config, options);
+                return engine.generateMissingDdl(selected, config, options,
+                        message -> logPanel.append(message, messagingLevel(message)));
             }
 
             @Override

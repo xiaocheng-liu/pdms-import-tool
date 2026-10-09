@@ -101,6 +101,29 @@ public final class SqlErrors {
         return readableMessage(error, 500);
     }
 
+    /**
+     * {@code XX000 cache lookup failed for type xxx}：服务端查不到某个类型 OID。
+     *
+     * <p>两种成因，都不是"数据行"的问题，且会让<b>整库所有行</b>报同一句话：
+     * <ol>
+     *   <li>驱动与服务端对参数类型 OID 的约定不一致（如 Kingbase 旧版本 + 新版 kingbase8 驱动，
+     *       服务端收到的 OID 比实际值多了 2^29 偏移），此时任何带参数的 PreparedStatement 都执行不了；</li>
+     *   <li>目标表被删除重建，会话/计划缓存里残留旧的行类型 OID。</li>
+     * </ol>
+     * 因此它必须被识别为环境性错误并按"整批/整表"处理，不能当成个别坏行去逐行重放。
+     */
+    public static boolean isUnknownTypeLookup(SQLException error) {
+        if (error == null) {
+            return false;
+        }
+        String message = error.getMessage();
+        if (message == null) {
+            return false;
+        }
+        return "XX000".equals(error.getSQLState())
+                && message.toLowerCase(Locale.ROOT).contains("cache lookup failed for type");
+    }
+
     /** 54 = program_limit_exceeded：服务端资源/结构限制（索引行大小、行大小、内存等） */
     public static boolean isProgramLimit(SQLException error) {
         if (error == null) {

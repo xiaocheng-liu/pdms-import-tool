@@ -499,11 +499,21 @@ public class ShardImportTask implements Callable<Boolean> {
         }
     }
 
+    /** 结构性坏行的说明：给出字段数差异与可操作的修复建议 */
+    private String describeMalformedRow(CSVRecord record, int columnCount) {
+        String tip = options.isSanitizeCarriageReturn()
+                ? "已开启「清洗回车符」仍有该问题，说明源文件的引号配对也可能不完整，请检查导出环节"
+                : "疑似未加引号的回车符（0x0D 后不跟 0x0A）把一行拆成了两行，请勾选「清洗回车符」后重新导入";
+        return "字段数 " + record.size() + " 与表头 " + columnCount + " 不一致，该行跳过；" + tip;
+    }
+
     /** 逐行读取当前分片并写入，按批汇报进度（行数增量实时同步，运行中也能看到进度） */
     private void runRows(BatchingWriter writer) throws SQLException, IOException {
         long reportedBytes = 0;
         long reportedRows = 0;
         long rows = 0;
+        long malformedRows = 0;
+        int columnCount = meta.getColumns().size();
         long startedAt = System.currentTimeMillis();
         long sanitized = 0;
         lastActivityAt = startedAt;
@@ -515,7 +525,17 @@ public class ShardImportTask implements Callable<Boolean> {
                 if (cancelled.get()) {
                     break;
                 }
-                writer.write(CsvMetaReader.valuesOf(record, meta.getColumns().size()), record.getRecordNumber());
+                if (record.size() != columnCount) {
+                    // 结构性坏行：字段数与表头对不上。绝大多数情况是源文件里有未加引号的裸回车符（0x0D 后不跟 0x0A），
+                    // 把一行拆成了两行，后半行少了前面若干列（15 + 13 = 27 这类组合）。
+                    // 这里必须拦住：若照常按位置绑定，后半行的值会整体左移写进前面的列。
+                    writer.skipMalformedRow(record.getRecordNumber(), describeMalformedRow(record, columnCount),
+                            CsvMetaReader.valuesOf(record, columnCount));
+                    malformedRows++;
+                    rows++;
+                    continue;
+                }
+                writer.write(CsvMetaReader.valuesOf(record, columnCount), record.getRecordNumber());
                 rows++;
                 if (rows % REPORT_INTERVAL == 0) {
                     long read = reader.bytesRead();
@@ -537,6 +557,12 @@ public class ShardImportTask implements Callable<Boolean> {
         if (sanitized > 0) {
             log("[提示] " + tableLabel + "：已把 " + sanitized
                     + " 个未加引号的回车符替换为空格（原始字段内容有变更）");
+        }
+        if (malformedRows > 0) {
+            log("[警告] " + tableLabel + "：" + malformedRows
+                    + " 行的字段数与表头不一致（" + columnCount + "），已逐行记录明细并跳过；"
+                    + "几乎都是源文件里存在未加引号的回车符（0x0D 后不跟 0x0A）把一行拆成了两行，"
+                    + "建议勾选「清洗回车符」后重新导入该文件");
         }
         log("[统计] " + tableLabel + "：成功 " + writer.getSuccessRows() + " 行，失败 "
                 + writer.getFailedRows() + " 行；批次 " + writer.getBatchCount() + " 次，执行累计 "

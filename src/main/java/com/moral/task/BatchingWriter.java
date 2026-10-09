@@ -48,9 +48,13 @@ public final class BatchingWriter {
     private static final int MAX_CONSECUTIVE_FAILURE_ROWS = 50;
     /** 明细中原始行的最大长度 */
     private static final int MAX_RAW_LINE = 2000;
-    /** 错误信息里的目标类型长度：character varying(258) / varchar2(100) / char(10) */
+    /**
+     * 错误信息里的目标类型长度：character varying(258) / varchar2(100) / char(10)；
+     * 以及金仓简体中文提示里的长度写法：对于可变字符类型来说，值太长了(96)
+     */
     private static final Pattern TYPE_LENGTH = Pattern.compile(
-            "(?:character varying|nvarchar2|varchar2|varchar|character|char)\\s*\\(\\s*(\\d+)\\s*\\)",
+            "(?:character varying|nvarchar2|varchar2|varchar|character|char)\\s*\\(\\s*(\\d+)\\s*\\)"
+                    + "|(?:值太长|太长|过长|超长)[^0-9\\n]{0,6}[（(]\\s*(\\d+)",
             Pattern.CASE_INSENSITIVE);
     /** 错误消息里已经出现的列名：for column 'xxx' / 列 "xxx" */
     private static final Pattern COLUMN_IN_MESSAGE = Pattern.compile(
@@ -172,6 +176,18 @@ public final class BatchingWriter {
         return lastBatchNanos / 1_000_000L;
     }
 
+    /**
+     * 记录在读取阶段就被判定为结构损坏、根本没拿去绑定/入库的行。
+     *
+     * <p>典型成因：源文件里出现"未加引号的裸回车符"，一行被拆成两行，后半行少了前面若干列。
+     * 这类行若按位置绑定，后半行的值会整体左移写进前面的列（例如把证型文本写进整型 ID 列，
+     * 报 22018 不是合法整数），既看不出真实原因，也可能悄悄把数据写错位置。
+     */
+    public void skipMalformedRow(long lineNo, String message, List<String> values) {
+        failedRows++;
+        recorder.record(tableLabel, lineNo, "ROW_FORMAT", message, toCsvLine(values));
+    }
+
     /** 加入一行，达到批量大小时自动提交（values 由调用方逐行新建，此处直接持有引用以避免复制开销） */
     public void write(List<String> values, long lineNo) throws SQLException {
         try {
@@ -253,7 +269,7 @@ public final class BatchingWriter {
         if (!isDataRowError(error)) {
             failedRows += size;
             recorder.record(tableLabel, firstLineNo(), describeCode(error),
-                    SqlErrors.readableMessage(error) + describeProgramLimitHint(error, size), "");
+                    SqlErrors.readableMessage(error) + describeTypeLookupHint(error, size), "");
             if (!continueOnError) {
                 throw error;
             }
@@ -574,6 +590,20 @@ public final class BatchingWriter {
         return "；整批 " + size + " 行均未入库（数据库级限制，不是个别坏行）——" + hint;
     }
 
+    /**
+     * 环境性错误的补充提示：除 54 类资源限制外，还要覆盖
+     * {@code XX000 cache lookup failed for type} —— 同样会让整批失败且与数据无关，
+     * 但成因是驱动/计划缓存里的类型 OID 失效，必须给出完全不同的排查方向。
+     */
+    private String describeTypeLookupHint(SQLException error, int size) {
+        if (!SqlErrors.isUnknownTypeLookup(error)) {
+            return describeProgramLimitHint(error, size);
+        }
+        return "；整批 " + size + " 行均未入库（服务端无法识别参数类型 OID，与数据内容无关）——"
+                + "常见于旧版 Kingbase 搭配高版本 kingbase8 驱动：工具建连时会自动切换到 simple 查询协议重试；"
+                + "若仍出现，请检查目标表是否在导入过程中被删除重建";
+    }
+
     /** 在给定行里找出超限（或最长）的列：byByte=false 按字符数，true 按 UTF-8 字节数 */
     private String findOverflow(List<List<String>> rows, int limit, boolean byByte) {
         int maxLength = -1;
@@ -628,17 +658,25 @@ public final class BatchingWriter {
                 || message.contains("超出长度");
     }
 
-    /** 从错误信息中提取目标类型长度，如 character varying(258) / varchar2(100) → 258 / 100 */
+    /** 从错误信息中提取目标类型长度，如 character varying(258) / varchar2(100) / 值太长了(96) → 258 / 100 / 96 */
     private static int extractLengthLimit(String message) {
         Matcher matcher = TYPE_LENGTH.matcher(message);
         if (!matcher.find()) {
             return -1;
         }
-        try {
-            return Integer.parseInt(matcher.group(1));
-        } catch (NumberFormatException ignore) {
-            return -1;
+        // 多个候选分组：中英文两种写法只有一个能命中
+        for (int group = 1; group <= matcher.groupCount(); group++) {
+            String value = matcher.group(group);
+            if (value == null) {
+                continue;
+            }
+            try {
+                return Integer.parseInt(value);
+            } catch (NumberFormatException ignore) {
+                // 该分组没命中，继续看下一个
+            }
         }
+        return -1;
     }
 
     private static String oneLine(String text) {
