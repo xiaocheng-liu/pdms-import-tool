@@ -13,11 +13,15 @@ PDMS 数据导入工具 1.0 —— 实施部署与使用说明（快速版）
   Windows   ：双击 run.bat（会弹出一个命令行窗口，导入过程中请勿关闭）
              直接用 PATH 中的 java 启动；Java 版本低于 21 时会提示并退出
   macOS/Linux：终端执行 ./run.sh；指定 JDK：./run.sh /opt/jdk-21
-  手动启动  ：java -Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8 -Xmx1g -jar pdms-import-tool.jar
+  手动启动  ：java -Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8 -Xms1g -Xmx2g -jar pdms-import-tool.jar
 
-  Windows 端 run.bat 不做 JDK 查找，直接使用 PATH 中的 java：
-     - 装多个 JDK 时，请把 PATH 调整到 JDK 21 的 bin 目录在最前面
-     - macOS / Linux 的 run.sh 仍支持按 命令行参数 > PDMS_JAVA_HOME > jdk-path.txt
+  run.bat 优先使用同目录 jdk-path.txt 中指定的 JDK，未指定时才用 PATH 中的 java，
+  启动时打印实际使用的 java 路径与 JDK 版本（提示信息为英文，便于兼容各代码页）：
+     - 装多个 JDK 时，在 jdk-path.txt 写一行 JDK 安装目录即可固定版本
+       （例如 C:\Program Files\Java\jdk-21），路径无效会明确报错并暂停
+     - 不想指定时，把该行注释掉（行首加 #）或整行删除
+     - 脚本在 cmd /k 会话中运行，报错或崩溃后窗口不会自动关闭，可完整查看输出
+     - macOS / Linux 的 run.sh 支持按 命令行参数 > PDMS_JAVA_HOME > jdk-path.txt
        > JAVA_HOME > PATH 的顺序指定 JDK
 
 三、使用步骤
@@ -109,7 +113,7 @@ PDMS 数据导入工具 1.0 —— 实施部署与使用说明（快速版）
                          并内置 PDMS 应用图标，启动后窗口标题栏 / 任务栏即显示该图标）
   run.bat                Windows 启动脚本
   run.sh                 macOS / Linux 启动脚本
-  jdk-path.txt           JDK 路径配置文件（可选；仅 run.sh 读取，run.bat 不读）
+  jdk-path.txt           JDK 路径配置文件（可选；run.bat 与 run.sh 均读取）
   README.md              完整功能说明（含参数细节、原理与打包成 exe / dmg 的方法）
   QUICKSTART.txt         本文件
   icons/                 应用图标素材

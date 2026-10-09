@@ -1,49 +1,35 @@
 @echo off
+rem 出错时也不关闭窗口：必要时自动重开一个常驻窗口再执行本脚本
+if "%PDMS_BAT_CHILD%"=="" (set PDMS_BAT_CHILD=1 & cmd /k ""%~f0"" & exit /b)
+
+rem 切到 UTF-8 代码页，保证中文提示与程序日志不乱码
 chcp 65001 >nul
-setlocal
 cd /d "%~dp0"
+title PDMS 数据导入工具
 
-rem ---------- 检查 java 是否可用 ----------
-where java >nul 2>nul
+rem 可选：把 JDK 安装目录写进 jdk-path.txt（一行，# 开头为注释）；不配则使用 PATH 里的 java
+set "JAVA_HOME_DIR="
+if exist "jdk-path.txt" for /f "usebackq eol=# delims=" %%i in ("jdk-path.txt") do if not defined JAVA_HOME_DIR set "JAVA_HOME_DIR=%%i"
+if defined JAVA_HOME_DIR (set "JAVA_CMD=%JAVA_HOME_DIR%\bin\java.exe") else (set "JAVA_CMD=java")
+
+"%JAVA_CMD%" -version >nul 2>nul
 if errorlevel 1 (
-    echo [错误] 未检测到 Java 运行环境，请安装 JDK 21 及以上版本，并确保 java 已加入 PATH。
-    echo.
+    echo [错误] Java 不可用：%JAVA_CMD%
+    echo 请修正 jdk-path.txt，或安装 JDK 21 及以上版本并把 java 加入 PATH。
+    pause
+    exit /b 1
+)
+if not exist "pdms-import-tool.jar" (
+    echo [错误] 当前目录下没有找到 pdms-import-tool.jar：%CD%
     pause
     exit /b 1
 )
 
-rem ---------- 检查 JDK 版本（最低 21）----------
-set "JVER="
-for /f "tokens=3 delims= " %%v in ('java -version 2^>^&1 ^| findstr /i "version"') do (
-    if not defined JVER set "JVER=%%~v"
-)
-
-set "JMAJOR="
-for /f "tokens=1,2 delims=." %%a in ("%JVER%") do (
-    set "JMAJOR=%%a"
-    if "%%a"=="1" set "JMAJOR=%%b"
-)
-
-echo %JMAJOR%| findstr /r "^[0-9][0-9]*" >nul
-if errorlevel 1 (
-    echo [错误] 无法识别 Java 版本，请安装 JDK 21 及以上版本。
-    echo.
-    pause
-    exit /b 1
-)
-
-if %JMAJOR% LSS 21 (
-    echo [错误] 当前 Java 版本为 %JMAJOR%（%JVER%），低于最低要求。
-    echo        请安装 JDK 21 及以上版本，并确保 PATH 中优先指向该版本。
-    echo.
-    pause
-    exit /b 1
-)
-
-java -Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8 -Xmx1g -jar pdms-import-tool.jar
-
-if errorlevel 1 (
-    echo.
-    echo [错误] 启动失败，请查看以上提示信息。
-    pause
-)
+echo Java 路径：%JAVA_CMD%
+"%JAVA_CMD%" -version 2>&1
+echo.
+echo 正在启动 PDMS 数据导入工具...
+"%JAVA_CMD%" -Dfile.encoding=UTF-8 -Xms1g -Xmx2g -jar pdms-import-tool.jar
+echo.
+echo 程序已退出，退出码：%ERRORLEVEL%
+pause

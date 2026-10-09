@@ -107,4 +107,5 @@ fi
 
 echo "[信息] Java 版本：$("$JAVA_CMD" -version 2>&1 | head -n 1)"
 echo "[信息] 正在启动 PDMS 数据导入工具..."
-exec "$JAVA_CMD" -Dfile.encoding=UTF-8 -Xmx1g -jar "$JAR_PATH"
+# 初始堆 1g：导入大表时避免运行中反复扩容触发 GC；最大堆 2g 给大字段批次留余量
+exec "$JAVA_CMD" -Dfile.encoding=UTF-8 -Xms1g -Xmx2g -jar "$JAR_PATH"

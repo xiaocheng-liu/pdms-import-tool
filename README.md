@@ -19,9 +19,9 @@
 ### Windows
 
 1. 安装 JDK 21 及以上（建议设置环境变量 `JAVA_HOME`，并把 `%JAVA_HOME%\bin` 加入 `PATH`）
-2. 双击 `run.bat`：直接用 PATH 中的 `java` 启动，启动前会校验版本，低于 21 时提示并退出
+2. 双击 `run.bat`：优先用同目录 `jdk-path.txt` 指定的 JDK，未指定时用 PATH 中的 `java`；启动前会校验版本，低于 21 时提示并退出，启动后打印实际使用的 java 路径与 JDK 版本
 
-Windows 端 `run.bat` 不再做 JDK 查找，也不读取 `jdk-path.txt`；机器上装了多个 JDK 时，请把 JDK 21 的 `bin` 目录放到 `PATH` 最前面。
+Windows 端装了多个 JDK 时，在 `jdk-path.txt` 里写一行 JDK 安装目录即可固定版本（路径无效会明确报错并暂停，不会悄悄改用其它版本）；也可把 JDK 21 的 `bin` 目录放到 `PATH` 最前面。
 
 ### macOS / Linux
 
@@ -36,7 +36,7 @@ Windows 端 `run.bat` 不再做 JDK 查找，也不读取 `jdk-path.txt`；机�
 
 ```bash
 mvn -o package
-java -Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8 -Xmx1g -jar target/pdms-import-tool.jar
+java -Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8 -Xms1g -Xmx2g -jar target/pdms-import-tool.jar
 ```
 
 ## 三、使用步骤
@@ -99,7 +99,7 @@ java -Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8 -Xmx1g -jar target/pdms-impo
 mvn -o package
 jpackage --type exe --name pdms-import-tool ^
   --input target --main-jar pdms-import-tool.jar ^
-  --main-class com.moral.Launcher --java-options "-Dfile.encoding=UTF-8 -Xmx1g" ^
+  --main-class com.moral.Launcher --java-options "-Dfile.encoding=UTF-8 -Xms1g -Xmx2g" ^
   --icon icons\PDMS.ico ^
   --win-console
 ```
@@ -109,7 +109,7 @@ macOS 生成 dmg：
 ```bash
 jpackage --type dmg --name pdms-import-tool \
   --input target --main-jar pdms-import-tool.jar \
-  --main-class com.moral.Launcher --java-options "-Dfile.encoding=UTF-8 -Xmx1g" \
+  --main-class com.moral.Launcher --java-options "-Dfile.encoding=UTF-8 -Xms1g -Xmx2g" \
   --icon icons/PDMS.icns
 ```
 
@@ -148,7 +148,7 @@ jpackage --type dmg --name pdms-import-tool \
 pdms-import-tool/
 ├── pom.xml                  # 依赖与 shade 打包配置（编译目标 Java 21）
 ├── run.sh / run.bat         # 启动脚本（Windows 端直接用 PATH 中的 java）
-├── jdk-path.txt             # JDK 路径配置模板（仅 run.sh 读取）
+├── jdk-path.txt             # JDK 路径配置模板（run.bat / run.sh 均读取，可选）
 ├── icons/                   # 应用图标（pdms-16~1024.png / PDMS.icns / PDMS.ico）
 └── src/main/java/com/moral/
     ├── Launcher.java        # 入口（启动时应用图标）
