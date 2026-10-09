@@ -10,6 +10,7 @@ import com.moral.db.Dialect;
 import com.moral.db.DialectFactory;
 import com.moral.model.ConnectionConfig;
 import com.moral.model.CsvTable;
+import com.moral.model.DbType;
 import com.moral.model.ImportOptions;
 import com.moral.model.ImportResult;
 import com.moral.model.TableProgress;
@@ -19,10 +20,13 @@ import com.moral.util.PlatformUtil;
 
 import java.io.File;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.function.Consumer;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -184,6 +188,9 @@ public final class ImportEngine {
                         clearTable(prepareConn, dialect, config, tableName, options.getClearMode());
                         listener.onLog("已清空表 " + tableName + "（" + options.getClearMode().getLabel() + "）");
                     }
+
+                    warnOversizedTextIndex(prepareConn, config.getDbType(), config.getSchema(), tableName,
+                            listener::onLog);
 
                     // 单表分片数：受并发线程数与单表上限约束；直接路径插入必须单会话
                     int shardCount = options.effectiveShardCount(
@@ -432,6 +439,45 @@ public final class ImportEngine {
             conn.commit();
         } catch (java.sql.SQLException ignore) {
             // DDL 多为隐式提交，忽略
+        }
+    }
+
+    /**
+     * 导入前预检：PostgreSQL / 金仓的 btree 索引单条目上限约 2704 字节，
+     * 长文本列（text、varchar(n>2704)）上建普通 btree 索引时，插入整篇 HTML 之类的长值会直接报
+     * SQLSTATE 54000（program_limit_exceeded），且是整批失败、日志里只能看到被 SQL 回显淹没的消息。
+     * 这里提前命中并给出可执行的修复建议，避免整张表空跑一轮。
+     */
+    private void warnOversizedTextIndex(Connection conn, DbType type, String schema, String tableName,
+                                        Consumer<String> log) {
+        if (type != DbType.POSTGRESQL && type != DbType.KINGBASE) {
+            return;
+        }
+        String sql = "SELECT c.relname, a.attname "
+                + "FROM pg_class tbl "
+                + "JOIN pg_namespace n ON n.oid = tbl.relnamespace "
+                + "JOIN pg_index idx ON idx.indrelid = tbl.oid "
+                + "JOIN pg_class c ON c.oid = idx.indexrelid "
+                + "JOIN pg_am am ON am.oid = c.relam "
+                + "JOIN pg_attribute a ON a.attrelid = tbl.oid AND a.attnum = ANY(idx.indkey) "
+                + "JOIN pg_type t ON t.oid = a.atttypid "
+                + "WHERE n.nspname = ? AND tbl.relname = ? AND am.amname = 'btree' AND idx.indisvalid "
+                + "AND t.typname IN ('varchar', 'bpchar', 'text') "
+                + "AND (a.atttypmod < 0 OR a.atttypmod - 4 > 2704)";
+        try (PreparedStatement statement = conn.prepareStatement(sql)) {
+            statement.setString(1, schema == null || schema.isEmpty() ? "public" : schema);
+            statement.setString(2, tableName);
+            try (ResultSet rows = statement.executeQuery()) {
+                while (rows.next()) {
+                    log.accept("[警告] " + tableName + "：列 " + rows.getString(2) + " 上存在 btree 索引 "
+                            + rows.getString(1) + "，该列可容纳的长度超过 btree 单条目上限（约 2704 字节），"
+                            + "写入长文本会整批报 54000(program_limit_exceeded)；"
+                            + "建议先 DROP INDEX 或改为全文索引（GIN）后再导入");
+                }
+            }
+        } catch (SQLException ignore) {
+            // 预检失败（版本差异、权限不足等）不影响导入；PG 事务已标记 aborted 时必须回滚
+            rollbackQuietly(conn);
         }
     }
 

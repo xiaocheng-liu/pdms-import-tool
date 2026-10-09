@@ -55,6 +55,9 @@ public final class BatchingWriter {
     /** 错误消息里已经出现的列名：for column 'xxx' / 列 "xxx" */
     private static final Pattern COLUMN_IN_MESSAGE = Pattern.compile(
             "(?:for\\s+column\\s+['\"`]?\\w+|列\\s*['\"`]?\\w+)", Pattern.CASE_INSENSITIVE);
+    /** 服务端大小上限：btree version 4 maximum 2704 / maximum size 8160 */
+    private static final Pattern MAX_SIZE = Pattern.compile(
+            "maximum(?:\\s+size)?\\s+(\\d+)", Pattern.CASE_INSENSITIVE);
 
     /** 宽容的日期时间解析器：日期必填，时间与小数秒可选（2026-09-28 / 2026-9-28 9:5:3.12） */
     private static final DateTimeFormatter FLEX_DATETIME = new DateTimeFormatterBuilder()
@@ -178,7 +181,7 @@ public final class BatchingWriter {
             // 直接记录该行并跳过，不影响同一批里的其它行
             failedRows++;
             recorder.record(tableLabel, lineNo, describeCode(error),
-                    oneLine(error.getMessage()) + describeOverflow(error, Collections.singletonList(values)),
+                    SqlErrors.readableMessage(error) + describeOverflow(error, Collections.singletonList(values)),
                     toCsvLine(values));
             if (!continueOnError) {
                 throw error;
@@ -244,13 +247,13 @@ public final class BatchingWriter {
         if (SqlErrors.isCancelOrTimeout(error)) {
             failedRows += size;
             recorder.record(tableLabel, firstLineNo(), describeCode(error),
-                    oneLine(error.getMessage()), "");
+                    SqlErrors.readableMessage(error), "");
             throw error;
         }
         if (!isDataRowError(error)) {
             failedRows += size;
             recorder.record(tableLabel, firstLineNo(), describeCode(error),
-                    oneLine(error.getMessage()), "");
+                    SqlErrors.readableMessage(error) + describeProgramLimitHint(error, size), "");
             if (!continueOnError) {
                 throw error;
             }
@@ -260,7 +263,7 @@ public final class BatchingWriter {
             failedRows += size;
             // 不逐行重放时整批只有一条明细，必须在此补出"疑似超长列"，否则无法定位字段
             recorder.record(tableLabel, firstLineNo(), describeCode(error),
-                    oneLine(error.getMessage()) + describeOverflow(error, pendingRows), "");
+                    SqlErrors.readableMessage(error) + describeOverflow(error, pendingRows), "");
             throw error;
         }
         replayRowByRow();
@@ -292,7 +295,7 @@ public final class BatchingWriter {
                     rollbackQuietly();
                 }
                 recorder.record(tableLabel, lineNo, describeCode(rowError),
-                        oneLine(rowError.getMessage()) + describeOverflow(rowError, Collections.singletonList(row)),
+                        SqlErrors.readableMessage(rowError) + describeOverflow(rowError, Collections.singletonList(row)),
                         toCsvLine(row));
                 if (SqlErrors.isCancelOrTimeout(rowError)) {
                     // 重放过程中被取消/超时：剩余行不再尝试，直接上抛交给外层降级或失败
@@ -332,7 +335,10 @@ public final class BatchingWriter {
                 || "23".equals(category)   // 完整性约束冲突（唯一键、非空、外键、CHECK）
                 || "21".equals(category)   // 基数违例
                 || "01".equals(category)   // 警告类
-                || "42804".equals(state);
+                || "42804".equals(state)
+                // 54 = program_limit_exceeded（PG / 金仓：btree 索引行超限、行过大）由具体行的
+                // 字段长度触发，逐行重放可精确定位坏行并保住好行；内存不足等其余 54 类仍按环境性错误处理
+                || SqlErrors.isRowSizeLimit(error);
     }
 
     private long firstLineNo() {
@@ -502,27 +508,70 @@ public final class BatchingWriter {
     }
 
     /**
-     * 长度超限类错误（典型：PG 22001 "value too long for type character varying(258)"）时，
-     * 数据库返回的消息里只有<b>目标类型长度</b>、不含列名，无法直接看出是哪个字段超长。
-     * 此处按错误信息里的类型长度，逐列比对本行（或本批各行）的值长度，补出"疑似超长列"。
+     * 长度/大小超限类错误（典型：PG 22001 "value too long for type character varying(258)"、
+     * PG / 金仓 54000 "index row size 3000 exceeds btree version 4 maximum 2704"）时，
+     * 数据库返回的消息里只有<b>目标长度</b>、不含列名，无法直接看出是哪个字段超长。
+     * 此处按错误信息里的长度上限，逐列比对本行（或本批各行）的值长度，补出"疑似超长列"。
      */
     private String describeOverflow(SQLException error, List<List<String>> rows) {
-        if (!isLengthError(error) || rows == null || rows.isEmpty()) {
+        if (rows == null || rows.isEmpty()) {
             return "";
         }
-        String message = error.getMessage() == null ? "" : error.getMessage();
+        String message = SqlErrors.readableMessage(error, 2000);
         // MySQL（Data too long for column 'x'）与 Oracle（value too large for column "X"）
         // 的错误消息本身就带列名，无需再猜测
         if (COLUMN_IN_MESSAGE.matcher(message).find()) {
             return "";
         }
-        int limit = extractLengthLimit(message);
+        int limit = extractLimit(error, message);
+        if (limit <= 0) {
+            return "";
+        }
         String overflow = findOverflow(rows, limit, false);
-        if (overflow.isEmpty() && limit > 0) {
-            // Oracle varchar2(n BYTE) 等按字节计长：中文字符数与字节数不一致时改用字节数比对
+        if (overflow.isEmpty()) {
+            // 按字节比对：btree 索引行、varchar2(n BYTE) 等均按字节限制，中文字符数与字节数不一致
             overflow = findOverflow(rows, limit, true);
         }
         return overflow;
+    }
+
+    /** 取出错误消息里的上限值：字段长度取声明长度，索引行/行大小取服务端最大值 */
+    private static int extractLimit(SQLException error, String message) {
+        if (isLengthError(error)) {
+            return extractLengthLimit(message);
+        }
+        if (SqlErrors.isRowSizeLimit(error)) {
+            return extractSizeLimit(message);
+        }
+        return -1;
+    }
+
+    /** 服务端大小上限：index row size 3000 exceeds btree version 4 maximum 2704 / row is too big: size 10000, maximum size 8160 */
+    private static int extractSizeLimit(String message) {
+        Matcher matcher = MAX_SIZE.matcher(message);
+        if (!matcher.find()) {
+            return -1;
+        }
+        try {
+            return Integer.parseInt(matcher.group(1));
+        } catch (NumberFormatException ignore) {
+            return -1;
+        }
+    }
+
+    /**
+     * 整批被数据库级限制（SQLSTATE 54）拒绝时的补充提示。
+     * 只记录"第 N 行"会被误读成个别坏行，必须点明整批都没入库，并给出 PG / 金仓最常见的排查方向。
+     */
+    private String describeProgramLimitHint(SQLException error, int size) {
+        if (!SqlErrors.isProgramLimit(error)) {
+            return "";
+        }
+        String hint = SqlErrors.isRowSizeLimit(error)
+                ? "目标表存在索引行/行大小上限（PG、金仓 btree 单条目上限约 2704 字节）："
+                        + "请检查 content 等长文本字段上是否建了普通 btree 索引，导入前可先删除该索引或改用全文索引"
+                : "多为服务端内存/资源限制，请检查数据库内存参数与磁盘空间";
+        return "；整批 " + size + " 行均未入库（数据库级限制，不是个别坏行）——" + hint;
     }
 
     /** 在给定行里找出超限（或最长）的列：byByte=false 按字符数，true 按 UTF-8 字节数 */

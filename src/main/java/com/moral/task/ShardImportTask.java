@@ -132,7 +132,7 @@ public class ShardImportTask implements Callable<Boolean> {
             rollback(conn);
             String message = SqlErrors.isCancelOrTimeout(error)
                     ? "写入超时/被中断：" + brief(error.getMessage())
-                    : "数据库错误：" + error.getMessage() + PlatformUtil.describeFileLockHint(error);
+                    : "数据库错误：" + SqlErrors.readableMessage(error) + PlatformUtil.describeFileLockHint(error);
             recorder.record(tableLabel, 0, "SQL/" + error.getErrorCode(), message, "");
             progress.setMessage(message);
             log("[失败] " + tableLabel + "：" + message);
@@ -424,7 +424,7 @@ public class ShardImportTask implements Callable<Boolean> {
             String message = SqlErrors.isCancelOrTimeout(error)
                     ? "写入超时/被中断：" + brief(error.getMessage()) + "（已超过 "
                             + options.getWriteTimeoutSeconds() + " 秒未返回）"
-                    : "极速模式写入失败：" + error.getMessage();
+                    : "极速模式写入失败：" + SqlErrors.readableMessage(error);
             recorder.record(tableLabel, 0, "SQL/" + error.getErrorCode(), message, "");
             progress.setMessage(message);
             log("[失败] " + tableLabel + "：" + message);
@@ -456,7 +456,7 @@ public class ShardImportTask implements Callable<Boolean> {
             String message = SqlErrors.isCancelOrTimeout(error)
                     ? "写入超时/被中断：" + brief(error.getMessage()) + "（已超过 "
                             + options.getWriteTimeoutSeconds() + " 秒未返回）"
-                    : "数据库错误：" + error.getMessage();
+                    : "数据库错误：" + SqlErrors.readableMessage(error);
             recorder.record(tableLabel, 0, "SQL/" + error.getErrorCode(), message, "");
             progress.setMessage(message);
             log("[失败] " + tableLabel + "：" + message);
