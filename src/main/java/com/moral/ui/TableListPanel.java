@@ -16,6 +16,7 @@ import javax.swing.table.TableCellRenderer;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
+import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.util.ArrayList;
 import java.util.List;
@@ -32,6 +33,7 @@ public class TableListPanel extends JPanel {
     private final JTable table = new JTable(model);
     private final JLabel summaryLabel = new JLabel("共 0 张表");
 
+    /** 创建表清单，并为至少六行数据预留高度。 */
     public TableListPanel() {
         setBorder(BorderFactory.createTitledBorder("表清单"));
         setLayout(new BorderLayout(4, 4));
@@ -68,6 +70,9 @@ public class TableListPanel extends JPanel {
 
         add(new JScrollPane(table), BorderLayout.CENTER);
         add(bottomPanel, BorderLayout.SOUTH);
+        int minimumHeight = table.getRowHeight() * 6 + table.getTableHeader().getPreferredSize().height
+                + bottomPanel.getPreferredSize().height + getInsets().top + getInsets().bottom + 8;
+        setMinimumSize(new Dimension(200, minimumHeight));
     }
 
     public void setTables(List<CsvTable> newTables) {

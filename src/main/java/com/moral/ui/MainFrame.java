@@ -76,11 +76,12 @@ public class MainFrame extends JFrame {
         buildUi();
         bindEvents();
         loadConfig();
-        setSize(1280, 900);
+        setSize(1280, 760);
         setMinimumSize(new Dimension(1150, 700));
         setLocationRelativeTo(null);
     }
 
+    /** 构建可调节布局，优先保留表清单空间。 */
     private void buildUi() {
         JPanel root = new JPanel(new BorderLayout(8, 8));
         root.setBorder(javax.swing.BorderFactory.createEmptyBorder(8, 10, 10, 10));
@@ -97,32 +98,40 @@ public class MainFrame extends JFrame {
         configScroll.setOpaque(false);
         configScroll.getViewport().setOpaque(false);
         configScroll.getVerticalScrollBar().setUnitIncrement(16);
+        configScroll.setMinimumSize(new Dimension(200, 80));
 
         splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT, configScroll, tableListPanel);
         splitPane.setResizeWeight(0);
         splitPane.setContinuousLayout(true);
-        splitPane.setDividerLocation(configPanel.getPreferredSize().height + 12);
-        splitPane.setMinimumSize(new Dimension(200, 140));
+        splitPane.setOneTouchExpandable(true);
 
-        // 日志区同样放进分割条，可上下拖动调整高度
-        logPanel.setPreferredSize(new Dimension(1000, 180));
-        logPanel.setMinimumSize(new Dimension(200, 100));
+        // 日志默认紧凑显示，新增窗口空间分配给表清单
+        logPanel.setPreferredSize(new Dimension(1000, 120));
+        logPanel.setMinimumSize(new Dimension(200, 80));
         mainSplitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT, splitPane, logPanel);
-        mainSplitPane.setResizeWeight(0.78);
-        mainSplitPane.setDividerLocation(0.78);
+        mainSplitPane.setResizeWeight(1);
         mainSplitPane.setContinuousLayout(true);
+        mainSplitPane.setOneTouchExpandable(true);
 
         root.add(mainSplitPane, BorderLayout.CENTER);
         root.add(buildActionBar(), BorderLayout.SOUTH);
 
-        // 窗口完成布局后按实际内容高度再校正一次分割条，保证"数据源文件夹"完整可见
-        SwingUtilities.invokeLater(() -> {
-            int height = configPanel.getPreferredSize().height + 12;
-            splitPane.setDividerLocation(height);
-            if (mainSplitPane.getHeight() > 0) {
-                mainSplitPane.setDividerLocation(Math.max(240, mainSplitPane.getHeight() - 200));
-            }
-        });
+        SwingUtilities.invokeLater(this::adjustInitialDividers);
+    }
+
+    /** 按实际窗口高度分配区域，空间不足时允许配置区滚动。 */
+    private void adjustInitialDividers() {
+        if (mainSplitPane.getHeight() <= 0) {
+            return;
+        }
+        int logDivider = mainSplitPane.getHeight() - mainSplitPane.getInsets().bottom
+                - mainSplitPane.getDividerSize() - logPanel.getPreferredSize().height;
+        mainSplitPane.setDividerLocation(logDivider);
+        mainSplitPane.validate();
+        int configHeight = splitPane.getHeight() - splitPane.getInsets().bottom
+                - splitPane.getDividerSize() - tableListPanel.getMinimumSize().height;
+        splitPane.setDividerLocation(Math.min(configPanel.getPreferredSize().height,
+                Math.max(splitPane.getTopComponent().getMinimumSize().height, configHeight)));
     }
 
     /**
@@ -208,21 +217,21 @@ public class MainFrame extends JFrame {
         return header;
     }
 
-    /** 底部操作栏：开始/停止/导出 + 总体进度（固定高度，不随分割条变化） */
+    /** 操作与进度同排，详细状态独占下一行。 */
     private JPanel buildActionBar() {
-        JPanel actionBar = new JPanel(new BorderLayout(10, 0));
+        JPanel actionBar = new JPanel(new BorderLayout(10, 4));
         JPanel actionPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         actionPanel.add(startButton);
         actionPanel.add(stopButton);
         actionPanel.add(exportButton);
 
-        JPanel progressPanel = new JPanel(new BorderLayout(10, 0));
+        JPanel controls = new JPanel(new BorderLayout(10, 0));
         totalProgress.setStringPainted(true);
-        progressPanel.add(totalProgress, BorderLayout.CENTER);
-        progressPanel.add(totalLabel, BorderLayout.EAST);
-
-        actionBar.add(actionPanel, BorderLayout.WEST);
-        actionBar.add(progressPanel, BorderLayout.CENTER);
+        controls.add(actionPanel, BorderLayout.WEST);
+        controls.add(totalProgress, BorderLayout.CENTER);
+        totalLabel.setMinimumSize(new Dimension(0, totalLabel.getPreferredSize().height));
+        actionBar.add(controls, BorderLayout.CENTER);
+        actionBar.add(totalLabel, BorderLayout.SOUTH);
 
         stopButton.setEnabled(false);
         exportButton.setEnabled(false);
@@ -268,9 +277,10 @@ public class MainFrame extends JFrame {
         logPanel.append("已加载上次配置", LogPanel.Level.INFO);
     }
 
+    /** 保存连接信息及密码，重启后自动回填密码框。 */
     private void saveConfig() {
         optionsPanel.applyTo(options);
-        ConfigStore.save(connectionPanel.buildConfig(), options, folderPanel.getDirectory(), false);
+        ConfigStore.save(connectionPanel.buildConfig(), options, folderPanel.getDirectory(), true);
     }
 
     private void scanFolder() {
@@ -582,5 +592,6 @@ public class MainFrame extends JFrame {
                 + "　写入 " + FileSizeUtil.formatNumber(rowsWritten) + " 行"
                 + (rowsFailed > 0 ? "（失败 " + FileSizeUtil.formatNumber(rowsFailed) + "）" : "")
                 + "　" + etaText);
+        totalLabel.setToolTipText(totalLabel.getText());
     }
 }

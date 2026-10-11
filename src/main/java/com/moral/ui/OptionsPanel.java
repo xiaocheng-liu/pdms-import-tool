@@ -9,9 +9,9 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JSpinner;
 import javax.swing.SpinnerNumberModel;
-import java.awt.FlowLayout;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
+import java.awt.GridLayout;
 import java.awt.Insets;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
@@ -77,17 +77,20 @@ public class OptionsPanel extends JPanel {
         constraints.gridx = 5;
         add(clearCombo, constraints);
 
-        // 第三行：写入超时（0 表示关闭自动中断）
+        // 第三行：写入超时与导入模式，共用已有空位
         constraints.gridy = 2;
         constraints.gridx = 0;
         add(label("写入超时(秒)"), constraints);
         constraints.gridx = 1;
         add(writeTimeoutSpinner, constraints);
+        constraints.gridx = 2;
+        constraints.gridwidth = 2;
+        add(fastModeCheck, constraints);
+        constraints.gridx = 4;
+        add(autoCreateCheck, constraints);
 
-        // 第四行：开关组单独一行，避免被压缩或裁切
-        JPanel checkPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 12, 0));
-        checkPanel.add(fastModeCheck);
-        checkPanel.add(autoCreateCheck);
+        // 字段处理开关单独一行，保证最小窗口宽度下完整显示
+        JPanel checkPanel = new JPanel(new GridLayout(0, 3, 8, 2));
         checkPanel.add(emptyAsNullCheck);
         checkPanel.add(continueOnErrorCheck);
         checkPanel.add(sanitizeCrCheck);

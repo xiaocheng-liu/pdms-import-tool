@@ -12,6 +12,9 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JPasswordField;
 import javax.swing.JTextField;
+import java.awt.BorderLayout;
+import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
@@ -33,6 +36,7 @@ public class ConnectionPanel extends JPanel {
     private final JLabel statusLabel = new JLabel("未测试");
     private final JLabel databaseLabel = new JLabel("服务名/SID");
 
+    /** 创建紧凑连接表单，相关字段同排显示。 */
     public ConnectionPanel() {
         setBorder(BorderFactory.createTitledBorder("数据库连接"));
         setLayout(new GridBagLayout());
@@ -48,35 +52,52 @@ public class ConnectionPanel extends JPanel {
 
         int row = 0;
         addRow(labelConstraints, fieldConstraints, row++, "类型", typeCombo);
-        addRow(labelConstraints, fieldConstraints, row++, "主机", hostField);
-        addRow(labelConstraints, fieldConstraints, row++, "端口", portField);
+        portField.setColumns(5);
+        addRow(labelConstraints, fieldConstraints, row++, "主机",
+                pairedFields(hostField, "端口", portField, 0));
         addRow(labelConstraints, fieldConstraints, row++, null, databaseLabel, databaseField);
-        addRow(labelConstraints, fieldConstraints, row++, "用户名", userField);
-        addRow(labelConstraints, fieldConstraints, row++, "密码", passwordField);
+        userField.setColumns(7);
+        passwordField.setColumns(7);
+        addRow(labelConstraints, fieldConstraints, row++, "用户名",
+                pairedFields(userField, "密码", passwordField, 1));
         addRow(labelConstraints, fieldConstraints, row++, "Schema", schemaField);
 
-        JPanel buttonPanel = new JPanel();
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
         buttonPanel.add(testButton);
         buttonPanel.add(saveButton);
+        JPanel actions = new JPanel(new BorderLayout(8, 0));
+        actions.add(buttonPanel, BorderLayout.WEST);
+        statusLabel.setMinimumSize(new Dimension(0, statusLabel.getPreferredSize().height));
+        statusLabel.setPreferredSize(new Dimension(100, statusLabel.getPreferredSize().height));
+        actions.add(statusLabel, BorderLayout.CENTER);
 
         GridBagConstraints buttonConstraints = new GridBagConstraints();
         buttonConstraints.gridx = 0;
-        buttonConstraints.gridy = row++;
+        buttonConstraints.gridy = row;
         buttonConstraints.gridwidth = 2;
-        buttonConstraints.insets = new Insets(6, 8, 2, 8);
-        buttonConstraints.anchor = GridBagConstraints.WEST;
-        add(buttonPanel, buttonConstraints);
-
-        GridBagConstraints statusConstraints = new GridBagConstraints();
-        statusConstraints.gridx = 0;
-        statusConstraints.gridy = row;
-        statusConstraints.gridwidth = 2;
-        statusConstraints.insets = new Insets(0, 8, 6, 8);
-        statusConstraints.anchor = GridBagConstraints.WEST;
-        add(statusLabel, statusConstraints);
+        buttonConstraints.insets = new Insets(6, 8, 6, 8);
+        buttonConstraints.fill = GridBagConstraints.HORIZONTAL;
+        buttonConstraints.weightx = 1;
+        add(actions, buttonConstraints);
 
         typeCombo.addActionListener(event -> onTypeChanged());
         testButton.addActionListener(event -> testConnection());
+    }
+
+    /** 将两个相关输入框放在一行，端口保持固定宽度。 */
+    private JPanel pairedFields(JTextField first, String label, JTextField second, double secondWeight) {
+        JPanel panel = new JPanel(new GridBagLayout());
+        GridBagConstraints constraints = new GridBagConstraints();
+        constraints.fill = GridBagConstraints.HORIZONTAL;
+        constraints.weightx = 1;
+        panel.add(first, constraints);
+        constraints.weightx = 0;
+        constraints.insets = new Insets(0, 8, 0, 6);
+        panel.add(new JLabel(label), constraints);
+        constraints.weightx = secondWeight;
+        constraints.insets = new Insets(0, 0, 0, 0);
+        panel.add(second, constraints);
+        return panel;
     }
 
     private void addRow(GridBagConstraints labelConstraints, GridBagConstraints fieldConstraints,
