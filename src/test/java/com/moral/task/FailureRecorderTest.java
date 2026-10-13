@@ -1,6 +1,7 @@
 package com.moral.task;
 
 import com.moral.model.FailureRecord;
+import com.moral.model.ImportResult;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.junit.Rule;
@@ -49,6 +50,29 @@ public class FailureRecorderTest {
             assertTrue(recorder.snapshot().isEmpty());
         }
         assertTrue(file.length() > 17 * 1024 * 1024);
+    }
+
+    /** 内存缓存不完整时仍导出所有落盘记录，同路径导出不会截断日志。 */
+    @Test
+    public void resultExportUsesCompleteLog() throws Exception {
+        File log = temporary.newFile("complete.tsv");
+        File target = temporary.newFile("copy.tsv");
+        ImportResult result = new ImportResult();
+        try (FailureRecorder recorder = new FailureRecorder()) {
+            recorder.openSink(log);
+            recorder.record("sample", 2, "22000", "bad row", "x".repeat(17 * 1024 * 1024));
+            recorder.record("sample", 3, "22000", "bad row", "small");
+            result.getFailures().addAll(recorder.snapshot());
+            result.setFailureRecordCount(recorder.getTotalCount());
+            result.setFailureLogFile(log.getAbsolutePath());
+        }
+        assertEquals(1, result.getFailures().size());
+        assertEquals(2, FailureRecorder.exportResult(result, target));
+        assertEquals(-1, Files.mismatch(log.toPath(), target.toPath()));
+        assertEquals(2, FailureRecorder.exportResult(result, log));
+        assertEquals(-1, Files.mismatch(log.toPath(), target.toPath()));
+        Files.delete(log.toPath());
+        assertThrows(java.io.IOException.class, () -> FailureRecorder.exportResult(result, target));
     }
 
     /** 没有磁盘副本且内存超限时必须显式失败。 */

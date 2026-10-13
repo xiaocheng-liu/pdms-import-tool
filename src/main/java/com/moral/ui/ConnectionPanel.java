@@ -1,8 +1,10 @@
 package com.moral.ui;
 
+import com.formdev.flatlaf.FlatClientProperties;
 import com.moral.db.ConnectionFactory;
 import com.moral.model.ConnectionConfig;
 import com.moral.model.DbType;
+import com.moral.util.PasswordVisibilityIcon;
 import com.moral.util.SwingUtil;
 
 import javax.swing.BorderFactory;
@@ -12,6 +14,7 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JPasswordField;
 import javax.swing.JTextField;
+import javax.swing.JToggleButton;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
@@ -58,6 +61,9 @@ public class ConnectionPanel extends JPanel {
         addRow(labelConstraints, fieldConstraints, row++, null, databaseLabel, databaseField);
         userField.setColumns(7);
         passwordField.setColumns(7);
+        // 在密码框右侧显示眼睛按钮，点击切换明文和隐藏。
+        passwordField.putClientProperty(FlatClientProperties.STYLE, "showRevealButton: true");
+        configurePasswordIcons();
         addRow(labelConstraints, fieldConstraints, row++, "用户名",
                 pairedFields(userField, "密码", passwordField, 1));
         addRow(labelConstraints, fieldConstraints, row++, "Schema", schemaField);
@@ -82,6 +88,19 @@ public class ConnectionPanel extends JPanel {
 
         typeCombo.addActionListener(event -> onTypeChanged());
         testButton.addActionListener(event -> testConnection());
+    }
+
+    /** 为密码按钮设置隐藏和显示状态的图标。 */
+    private void configurePasswordIcons() {
+        for (java.awt.Component component : passwordField.getComponents()) {
+            if (component instanceof JToggleButton button
+                    && "PasswordField.revealButton".equals(button.getName())) {
+                button.setIcon(new PasswordVisibilityIcon(false));
+                button.setSelectedIcon(new PasswordVisibilityIcon(true));
+                button.setToolTipText("显示/隐藏密码");
+                button.getAccessibleContext().setAccessibleName("显示/隐藏密码");
+            }
+        }
     }
 
     /** 将两个相关输入框放在一行，端口保持固定宽度。 */

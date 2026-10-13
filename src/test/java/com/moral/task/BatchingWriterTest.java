@@ -187,6 +187,53 @@ public class BatchingWriterTest {
         }
     }
 
+    /** 源定义为数值列时按 BigDecimal 写入，字符列仍保留前导零。 */
+    @Test
+    public void declaredTypesControlBinding() throws Exception {
+        for (InferredType type : List.of(InferredType.DECIMAL, InferredType.STRING)) {
+            JdbcFixture db = new JdbcFixture();
+            ColumnProfile profile = new ColumnProfile("value");
+            profile.setType(type);
+            profile.setDeclaredSqlType(type == InferredType.DECIMAL ? "NUMERIC(18,4)" : "VARCHAR(20)");
+            BatchingWriter writer = new BatchingWriter(db.connection, db.statement, List.of(profile),
+                    1000, true, false, db.recorder, "sample", 0);
+            writer.write(List.of("00123"), 2);
+            writer.flush();
+            assertEquals(List.of(type == InferredType.DECIMAL ? new BigDecimal("123") : "00123"), db.committed);
+        }
+    }
+
+    /** 达到数据量阈值时先提交已有批次，不能无限堆积大文本。 */
+    @Test
+    public void largePayloadFlushesBeforeNextRow() throws Exception {
+        JdbcFixture db = new JdbcFixture();
+        BatchingWriter writer = db.writer(InferredType.STRING, false);
+        String large = "中".repeat(1_500_000);
+        writer.write(List.of(large), 2);
+        assertEquals(0, writer.getSuccessRows());
+        writer.write(List.of(large), 3);
+        assertEquals(1, writer.getSuccessRows());
+        assertEquals(1, writer.pending());
+        writer.flush();
+        assertEquals(2, writer.getSuccessRows());
+        assertEquals(large, db.committed.get(1));
+    }
+
+    /** 单条超大记录独立提交且不截断内容。 */
+    @Test
+    public void oversizedSingleRowIsWrittenIntact() throws Exception {
+        JdbcFixture db = new JdbcFixture();
+        BatchingWriter writer = db.writer(InferredType.STRING, false);
+        String large = "x".repeat(3_000_000);
+        writer.write(List.of("small"), 2);
+        writer.write(List.of(large), 3);
+        assertEquals(2, writer.getSuccessRows());
+        assertEquals(0, writer.pending());
+        assertEquals(List.of("small", large), db.committed);
+        writer.write(List.of("tail"), 4);
+        assertEquals(1, writer.pending());
+    }
+
     /** 驱动取消调用阻塞时，界面发起取消的线程仍应立即返回。 */
     @Test
     public void cancellationDoesNotBlockCallerOnDriver() throws Exception {

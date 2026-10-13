@@ -335,7 +335,7 @@ public class ShardImportTask implements Callable<Boolean> {
                     cancelled::get);
         } catch (SQLException error) {
             // 回滚未确认或超时已终止连接时，不允许从头重试。
-            conn.rollback();
+            rollbackOrRethrow(conn, error);
             if (cancelled.get()) {
                 return false;
             }
@@ -393,7 +393,7 @@ public class ShardImportTask implements Callable<Boolean> {
                     cancelled::get,
                     statement -> activeStreamStatement = statement);
         } catch (SQLException error) {
-            conn.rollback();
+            rollbackOrRethrow(conn, error);
             if (cancelled.get()) {
                 return false;
             }
@@ -434,7 +434,7 @@ public class ShardImportTask implements Callable<Boolean> {
             runRows(writer);
             return !cancelled.get();
         } catch (SQLException error) {
-            conn.rollback();
+            rollbackOrRethrow(conn, error);
             if ((writer == null || writer.canRetryFromStart()) && !cancelled.get() && !autoCancelled.get()) {
                 log("[降级] " + tableLabel + "：极速模式(" + dialect.type().getDisplayName()
                         + " 直接路径插入)不可用，改用标准模式重试：" + brief(error.getMessage()));
@@ -601,6 +601,16 @@ public class ShardImportTask implements Callable<Boolean> {
                 + writer.getExecuteMillis() + " ms，提交累计 " + writer.getCommitMillis()
                 + " ms，最近一批 " + writer.getLastBatchMillis() + " ms，读取+写入总耗时 "
                 + FileSizeUtil.formatDuration(System.currentTimeMillis() - startedAt));
+    }
+
+    /** 回滚失败时保留最初异常，禁止降级重放，避免连接关闭错误覆盖真实原因。 */
+    private static void rollbackOrRethrow(Connection conn, SQLException original) throws SQLException {
+        try {
+            conn.rollback();
+        } catch (SQLException rollbackError) {
+            original.addSuppressed(rollbackError);
+            throw original;
+        }
     }
 
     private void rollback(Connection conn) {

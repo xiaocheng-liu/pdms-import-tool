@@ -70,6 +70,22 @@ public class ShardImportTaskTest {
                 new Class<?>[]{Connection.class}, db.connection));
     }
 
+    /** 二次回滚断连不能覆盖执行批次的原始错误，也不能降级重放。 */
+    @Test
+    public void fastRollbackFailurePreservesOriginalError() throws Exception {
+        ShardImportTask task = task(new AtomicBoolean());
+        BatchingWriterTest.JdbcFixture db = new BatchingWriterTest.JdbcFixture();
+        db.batchError = new SQLException("original batch failure", "08006", 7001);
+        db.rollbackError = new SQLException("connection closed", "08003", 6060);
+        var thrown = assertThrows(java.lang.reflect.InvocationTargetException.class,
+                () -> invoke(task, "fastPathInsert", new Class<?>[]{Connection.class}, db.connection));
+        assertSame(db.batchError, thrown.getCause());
+        assertTrue(db.batchError.getSuppressed().length > 0);
+        assertEquals(0, db.replayCalls);
+        FailureRecorder recorder = (FailureRecorder) field(task, "recorder");
+        assertTrue(recorder.snapshot().getFirst().getMessage().contains("original batch failure"));
+    }
+
     /** COPY 没有 Statement，超时也必须触发连接级终止。 */
     @Test
     public void stalledCopyAbortsConnectionWithoutStatement() throws Exception {

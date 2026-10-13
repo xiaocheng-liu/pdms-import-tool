@@ -76,7 +76,7 @@ public class MainFrame extends JFrame {
         buildUi();
         bindEvents();
         loadConfig();
-        setSize(1280, 760);
+        setSize(1280, 800);
         setMinimumSize(new Dimension(1150, 700));
         setLocationRelativeTo(null);
     }
@@ -443,7 +443,7 @@ public class MainFrame extends JFrame {
         // 失败行明细：实时落盘文件 + 导出入口提示
         if (lastResult.getFailedRows() > 0 || !lastResult.getFailures().isEmpty()) {
             String failureLog = lastResult.getFailureLogFile();
-            String hint = "失败行明细共 " + lastResult.getFailures().size() + " 条";
+            String hint = "失败明细共 " + lastResult.getFailureRecordCount() + " 条";
             if (failureLog != null) {
                 hint += "，已实时写入：" + failureLog;
             }
@@ -455,7 +455,7 @@ public class MainFrame extends JFrame {
     }
 
     private void exportFailures() {
-        if (lastResult == null || lastResult.getFailures().isEmpty()) {
+        if (lastResult == null || lastResult.getFailureRecordCount() == 0) {
             SwingUtil.showInfo(this, "没有失败明细需要导出");
             return;
         }
@@ -467,7 +467,7 @@ public class MainFrame extends JFrame {
         }
         File target = chooser.getSelectedFile();
         try {
-            int count = FailureRecorder.export(lastResult.getFailures(), target);
+            long count = FailureRecorder.exportResult(lastResult, target);
             logPanel.append("已导出 " + count + " 条失败明细：" + target.getAbsolutePath(), LogPanel.Level.SUCCESS);
             SwingUtil.showInfo(this, "已导出 " + count + " 条失败明细");
         } catch (Exception e) {

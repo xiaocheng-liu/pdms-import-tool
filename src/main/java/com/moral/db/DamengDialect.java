@@ -11,6 +11,12 @@ import com.moral.model.InferredType;
  */
 public class DamengDialect extends OracleDialect {
 
+    /** 允许变长字段跨页存储，避免源库合法的宽记录触发 -2665。 */
+    @Override
+    public String createTableSuffix() {
+        return " STORAGE(USING LONG ROW)";
+    }
+
     @Override
     public DbType type() {
         return DbType.DAMENG;
@@ -51,9 +57,9 @@ public class DamengDialect extends OracleDialect {
             case TEXT:
                 return "CLOB";
             default:
-                // 达梦 VARCHAR 按字符计算长度，上限 8188
-                int length = Math.min(8188, Math.max(1, (int) Math.ceil(profile.getMaxLength() * 1.5)));
-                return "VARCHAR(" + length + ")";
+                // 显式字符语义；按 UTF-8 最多四字节保守控制字段容量。
+                int length = Math.max(1, (int) Math.ceil(profile.getMaxLength() * 1.5));
+                return length > 2047 ? "CLOB" : "VARCHAR(" + length + " CHAR)";
         }
     }
 

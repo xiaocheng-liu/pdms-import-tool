@@ -18,6 +18,17 @@ public class ImportResult {
     private boolean cancelled;
     /** 实时写入的失败明细日志文件（没有失败时为 null） */
     private String failureLogFile;
+    private long failureRecordCount;
+
+    /** 完整明细总数，独立于内存缓存条数和失败数据行数。 */
+    public long getFailureRecordCount() {
+        return failureRecordCount;
+    }
+
+    /** 汇总落盘与内存共同记录的明细总数。 */
+    public void setFailureRecordCount(long failureRecordCount) {
+        this.failureRecordCount = failureRecordCount;
+    }
 
     public synchronized void addFailure(FailureRecord record) {
         failures.add(record);

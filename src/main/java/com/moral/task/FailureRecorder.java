@@ -1,6 +1,7 @@
 package com.moral.task;
 
 import com.moral.model.FailureRecord;
+import com.moral.model.ImportResult;
 
 import java.io.BufferedWriter;
 import java.io.Closeable;
@@ -138,6 +139,27 @@ public final class FailureRecorder implements Closeable {
     /** 导出为 UTF-8 文本文件，返回导出行数 */
     public int export(File file) throws IOException {
         return export(snapshot(), file);
+    }
+
+    /** 优先复制完整落盘文件，不能把有上限的内存缓存当作全部明细导出。 */
+    public static long exportResult(ImportResult result, File file) throws IOException {
+        if (result.getFailureLogFile() != null) {
+            File source = new File(result.getFailureLogFile());
+            if (!source.isFile()) {
+                throw new IOException("完整失败日志不存在：" + source + "，不能仅导出部分内存明细");
+            }
+            if (file.exists() && Files.isSameFile(source.toPath(), file.toPath())) {
+                return result.getFailureRecordCount();
+            }
+            File parent = file.getAbsoluteFile().getParentFile();
+            Files.createDirectories(parent.toPath());
+            Files.copy(source.toPath(), file.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            return result.getFailureRecordCount();
+        }
+        if (result.getFailureRecordCount() > result.getFailures().size()) {
+            throw new IOException("完整失败日志不可用，内存中仅保留部分明细");
+        }
+        return export(result.getFailures(), file);
     }
 
     /** 导出指定明细列表 */

@@ -90,6 +90,7 @@ public final class BatchingWriter {
     private final PreparedStatement statement;
     private final List<ColumnProfile> profiles;
     private final int batchSize;
+    private long pendingPayloadBytes;
     private final boolean emptyAsNull;
     private final boolean continueOnError;
     private final FailureRecorder recorder;
@@ -193,6 +194,11 @@ public final class BatchingWriter {
     /** 加入一行，达到批量大小时自动提交（values 由调用方逐行新建，此处直接持有引用以避免复制开销） */
     public void write(List<String> values, long lineNo) throws SQLException {
         checkCancelled();
+        long rowBytes = estimatedPayloadBytes(values);
+        // 按字符数据的保守字节估算限制批次，单条超大记录仍完整单独写入。
+        if (!pendingRows.isEmpty() && pendingPayloadBytes + rowBytes > 8L * 1024 * 1024) {
+            flush();
+        }
         try {
             bind(values);
         } catch (SQLException error) {
@@ -210,9 +216,19 @@ public final class BatchingWriter {
         statement.addBatch();
         pendingRows.add(values);
         pendingLines.add(lineNo);
-        if (pendingRows.size() >= batchSize) {
+        pendingPayloadBytes += rowBytes;
+        if (pendingRows.size() >= batchSize || pendingPayloadBytes >= 8L * 1024 * 1024) {
             flush();
         }
+    }
+
+    /** 每个 UTF-16 单元按最多三个 UTF-8 字节估算，避免为大文本创建临时字节数组。 */
+    private static long estimatedPayloadBytes(List<String> values) {
+        long bytes = 0;
+        for (String value : values) {
+            if (value != null) bytes += value.length() * 3L;
+        }
+        return bytes;
     }
 
     /** 提交剩余批次，并统计各阶段耗时（执行 / 提交） */
@@ -237,6 +253,10 @@ public final class BatchingWriter {
                     transactionUncertain = true;
                     error.addSuppressed(rollbackError);
                     failedRows += size;
+                    recorder.record(tableLabel, firstLineNo(), describeCode(error),
+                            "批次执行失败，回滚也失败；禁止重放，请核对目标数据。原始错误："
+                                    + SqlErrors.readableMessage(error) + "；回滚错误："
+                                    + SqlErrors.readableMessage(rollbackError), "");
                     throw error;
                 }
                 handleBatchError(error, size);
@@ -259,6 +279,7 @@ public final class BatchingWriter {
         } finally {
             lastBatchNanos = System.nanoTime() - start;
             batchStartedAt = 0;
+            pendingPayloadBytes = 0;
             pendingRows.clear();
             pendingLines.clear();
             clearBatchQuietly();
@@ -521,6 +542,9 @@ public final class BatchingWriter {
 
     /** 采样外出现编码式前导零时保留失败原文，不能静默丢零。 */
     private static void checkNumericRepresentation(ColumnProfile profile, String value) throws SQLException {
+        if (profile.getDeclaredSqlType() != null) {
+            return; // 明确定义为数值列时，允许 CSV 使用前导零表示数字
+        }
         String text = value.trim();
         int start = text.startsWith("-") || text.startsWith("+") ? 1 : 0;
         if (text.length() > start + 1 && text.charAt(start) == '0'

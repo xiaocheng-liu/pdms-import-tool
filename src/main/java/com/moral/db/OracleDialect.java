@@ -156,41 +156,39 @@ public class OracleDialect implements Dialect {
         return Collections.emptyList();
     }
 
+    /** 只认目标 schema 下的精确名称，不能把其他 schema 的同名对象当作目标表。 */
     @Override
     public boolean tableExists(Connection conn, String schema, String table) throws SQLException {
-        DatabaseMetaData metaData = conn.getMetaData();
+        DatabaseMetaData metadata = conn.getMetaData();
+        String owner = schema;
+        if (owner == null || owner.isBlank()) {
+            try {
+                owner = conn.getSchema();
+            } catch (SQLException | AbstractMethodError ignored) {
+                // 老驱动不支持 getSchema 时使用连接用户。
+            }
+            if (owner == null || owner.isBlank()) owner = metadata.getUserName();
+        }
+        if (owner == null || owner.isBlank()) {
+            throw new SQLException("无法确定目标 Schema，请在连接配置中明确填写 Schema");
+        }
+        owner = owner.trim().toUpperCase(Locale.ROOT);
         String tableName = normalizeTableName(table);
-        String[] schemaCandidates = schemaCandidates(conn, schema);
-        for (String candidate : schemaCandidates) {
-            try (ResultSet rs = metaData.getTables(null, candidate, tableName, new String[]{"TABLE", "VIEW", "SYNONYM"})) {
-                if (rs != null && rs.next()) {
-                    return true;
-                }
+        String escape = metadata.getSearchStringEscape();
+        try (ResultSet rows = metadata.getTables(null, metadataPattern(owner, escape),
+                metadataPattern(tableName, escape), new String[]{"TABLE", "VIEW", "SYNONYM"})) {
+            while (rows != null && rows.next()) {
+                // 驱动可能忽略过滤参数，仍校验返回值；保留引用标识符的大小写区别。
+                if (owner.equals(rows.getString("TABLE_SCHEM"))
+                        && tableName.equals(rows.getString("TABLE_NAME"))) return true;
             }
         }
         return false;
     }
 
-    /** 依次尝试：指定 schema（大写）、连接用户 schema、不限制 schema */
-    protected String[] schemaCandidates(Connection conn, String schema) {
-        String upper = schema == null || schema.trim().isEmpty() ? null : schema.trim().toUpperCase(Locale.ROOT);
-        String userSchema = null;
-        try {
-            userSchema = conn.getSchema();
-        } catch (SQLException | AbstractMethodError ignore) {
-            userSchema = null;
-        }
-        if (userSchema == null || userSchema.trim().isEmpty()) {
-            userSchema = upper;
-        } else {
-            userSchema = userSchema.trim().toUpperCase(Locale.ROOT);
-        }
-        if (upper == null) {
-            return new String[]{userSchema, null};
-        }
-        if (upper.equals(userSchema)) {
-            return new String[]{upper, null};
-        }
-        return new String[]{upper, userSchema, null};
+    /** JDBC 元数据参数是 LIKE 模式，转义名称内的通配符。 */
+    private static String metadataPattern(String name, String escape) {
+        if (escape == null || escape.isEmpty()) return name;
+        return name.replace(escape, escape + escape).replace("_", escape + "_").replace("%", escape + "%");
     }
 }

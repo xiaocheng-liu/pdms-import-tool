@@ -8,6 +8,17 @@ public class ColumnProfile {
     private final String name;
     private InferredType type = InferredType.STRING;
     private int maxLength = 1;
+    private String declaredSqlType;
+
+    /** 从 Oracle 建表定义转换得到的目标类型，空值表示继续使用采样。 */
+    public String getDeclaredSqlType() {
+        return declaredSqlType;
+    }
+
+    /** 同步保存建表类型，参数绑定仍使用 type。 */
+    public void setDeclaredSqlType(String declaredSqlType) {
+        this.declaredSqlType = declaredSqlType;
+    }
 
     public ColumnProfile(String name) {
         this.name = name;

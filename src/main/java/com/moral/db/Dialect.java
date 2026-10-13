@@ -61,6 +61,11 @@ public interface Dialect {
     /** 列类型 DDL 映射 */
     String mapColumnType(ColumnProfile profile);
 
+    /** 建表语句末尾的存储选项，默认不附加。 */
+    default String createTableSuffix() {
+        return "";
+    }
+
     /** 判断表是否存在 */
     boolean tableExists(Connection conn, String schema, String table) throws SQLException;
 

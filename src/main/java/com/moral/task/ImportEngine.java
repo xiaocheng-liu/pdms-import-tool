@@ -4,6 +4,7 @@ import com.moral.csv.ByteRange;
 import com.moral.csv.CsvMeta;
 import com.moral.csv.CsvMetaReader;
 import com.moral.csv.DdlBuilder;
+import com.moral.csv.OracleTableDefinitions;
 import com.moral.csv.SplitPlanner;
 import com.moral.db.ConnectionFactory;
 import com.moral.db.Dialect;
@@ -109,6 +110,7 @@ public final class ImportEngine {
         Dialect dialect = DialectFactory.get(config.getDbType());
         ProtocolCompat.detectOnce(config, logger);
         int failedChecks = 0;
+        OracleTableDefinitions definitions = new OracleTableDefinitions();
         try (Connection conn = ConnectionFactory.create(config)) {
             for (CsvTable table : tables) {
                 try {
@@ -121,6 +123,7 @@ public final class ImportEngine {
                     if (!meta.isValid()) {
                         continue;
                     }
+                    definitions.apply(table, meta, options.getEncoding(), dialect, config.getSchema(), logger);
                     ddlMap.put(table.getTableName(), DdlBuilder.build(dialect, config.getSchema(), tableName, meta));
                 } catch (Exception error) {
                     failedChecks++;
@@ -199,6 +202,7 @@ public final class ImportEngine {
                 listener.onLog("极速模式已开启：" + describeFastMode(dialect));
             }
 
+            OracleTableDefinitions definitions = new OracleTableDefinitions();
             try (Connection prepareConn = ConnectionFactory.create(config)) {
                 prepareConnection = prepareConn;
                 for (CsvTable table : tables) {
@@ -219,6 +223,7 @@ public final class ImportEngine {
                         boolean missing = !dialect.tableExists(prepareConn, config.getSchema(), tableName);
                         if (missing && options.isAutoCreateTable() && ddlMap != null
                                 && ddlMap.containsKey(table.getTableName())) {
+                            definitions.apply(table, meta, options.getEncoding(), dialect, config.getSchema(), listener::onLog);
                             ensureSchemaExists(prepareConn, dialect, config);
                             executeDdl(prepareConn, ddlMap.get(table.getTableName()));
                             listener.onLog("已创建表 " + dialect.fullyQualified(config.getSchema(), tableName));
@@ -492,6 +497,7 @@ public final class ImportEngine {
         result.setFailedTables(failedTables);
         result.setSuccessRows(successRows);
         result.setFailedRows(failedRows);
+        result.setFailureRecordCount(recorder.getTotalCount());
         for (com.moral.model.FailureRecord record : recorder.snapshot()) {
             result.addFailure(record);
         }

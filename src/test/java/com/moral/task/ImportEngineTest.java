@@ -75,8 +75,11 @@ public class ImportEngineTest {
         Method method = ImportEngine.class.getDeclaredMethod("summarize",
                 List.class, Map.class, ImportResult.class, FailureRecorder.class);
         method.setAccessible(true);
+        FailureRecorder recorder = new FailureRecorder();
+        recorder.record("sample", 1, "22000", "bad", "value");
         method.invoke(engine, Collections.singletonList(table),
-                Collections.singletonMap(table, successfulFutures()), result, new FailureRecorder());
+                Collections.singletonMap(table, successfulFutures()), result, recorder);
+        assertEquals(1, result.getFailureRecordCount());
         assertEquals(TableStatus.FAILED, table.getProgress().getStatus());
         assertEquals(0, result.getSuccessTables());
         assertEquals(1, result.getFailedTables());
