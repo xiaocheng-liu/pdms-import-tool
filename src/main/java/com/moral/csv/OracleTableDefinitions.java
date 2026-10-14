@@ -77,6 +77,18 @@ public final class OracleTableDefinitions {
                 throw new IOException(name + "." + profile.getName() + "：Oracle 类型 " + declaration
                         + " 暂无可靠的 " + dialect.type().getDisplayName() + " 等价映射，请手工确认建表类型");
             }
+            if (dialect.type() == com.moral.model.DbType.ORACLE) {
+                if (profile.getObservedMaxCharacters() > mapped.characterLimit()) {
+                    throw new IOException(name + "." + profile.getName() + "：CSV 采样最大字符数 "
+                            + profile.getObservedMaxCharacters() + " 超过脚本声明 " + mapped.sql()
+                            + " 的长度，请调整列定义后重试");
+                }
+                if (mapped.sql().endsWith(" CHAR)")
+                        && !declaration.toUpperCase(Locale.ROOT).matches(".*\\bCHAR\\s*\\)\\s*")) {
+                    logger.accept("[建表] " + name + "." + profile.getName()
+                            + "：脚本未指定长度单位，使用 " + mapped.sql());
+                }
+            }
             profile.setDeclaredSqlType(mapped.sql());
             profile.setType(mapped.binding());
             matched++;

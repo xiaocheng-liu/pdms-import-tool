@@ -21,7 +21,13 @@ record OracleColumnType(String sql, InferredType binding) {
         if (chars.matches()) {
             int length = Integer.parseInt(chars.group(2));
             if (length < 1) return null;
-            if (oracle) return new OracleColumnType(type, InferredType.STRING);
+            if (oracle) {
+                String name = chars.group(1);
+                // 国家字符类型自带字符语义，仅为普通字符列补充缺省单位。
+                String sql = chars.group(3) == null && !name.startsWith("N")
+                        ? name + "(" + length + " CHAR)" : type;
+                return new OracleColumnType(sql, InferredType.STRING);
+            }
             boolean fixed = chars.group(1).equals("CHAR") || chars.group(1).equals("NCHAR");
             if ((mysql && length > (fixed ? 255 : 4000)) || (dm && length > 2047)) {
                 return new OracleColumnType(mysql ? "LONGTEXT" : "CLOB", InferredType.TEXT);
@@ -82,5 +88,11 @@ record OracleColumnType(String sql, InferredType binding) {
                     InferredType.DECIMAL);
         }
         return null;
+    }
+
+    /** 返回字符列的声明长度；大字段和其他类型不限制采样字符数。 */
+    int characterLimit() {
+        Matcher chars = Pattern.compile("(?:VARCHAR2|VARCHAR|NVARCHAR2|CHAR|NCHAR)\\((\\d+)(?: (?:BYTE|CHAR))?\\)").matcher(sql);
+        return chars.matches() ? Integer.parseInt(chars.group(1)) : Integer.MAX_VALUE;
     }
 }

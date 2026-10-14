@@ -40,27 +40,40 @@ public final class ConnectionFactory {
         return create(cfg, 0);
     }
 
+    /** 测试连接专用建连入口，连接和网络读取均限制为指定秒数。 */
+    private static Connection createForTest(ConnectionConfig cfg, int timeoutSeconds) throws SQLException {
+        return create(cfg, 0, timeoutSeconds * 1000);
+    }
+
     /**
      * @param writeTimeoutSeconds 写入超时（秒）；仅在网络超时基础上取更大值，
      *                            网络超时永远不小于 {@link #DEFAULT_NETWORK_TIMEOUT_MS}，
      *                            避免把"写得慢但正常"的批次误杀
      */
     public static Connection create(ConnectionConfig cfg, int writeTimeoutSeconds) throws SQLException {
+        return create(cfg, writeTimeoutSeconds, 0);
+    }
+
+    private static Connection create(ConnectionConfig cfg, int writeTimeoutSeconds, int testTimeoutMillis) throws SQLException {
         Dialect dialect = DialectFactory.get(cfg.getDbType());
         loadDriver(dialect.driverClass());
         int networkMillis = writeTimeoutSeconds > 0
                 ? Math.max(writeTimeoutSeconds * 1000, DEFAULT_NETWORK_TIMEOUT_MS)
                 : DEFAULT_NETWORK_TIMEOUT_MS;
+        if (testTimeoutMillis > 0) {
+            networkMillis = testTimeoutMillis;
+        }
         Properties props = new Properties();
         props.setProperty("user", cfg.getUser());
         props.setProperty("password", cfg.getPassword() == null ? "" : cfg.getPassword());
         // Oracle 中文环境：确保驱动按 UTF-8 处理字符串
         if (cfg.getDbType() == com.moral.model.DbType.ORACLE) {
             props.setProperty("oracle.jdbc.defaultNChar", "false");
-            props.setProperty("oracle.net.CONNECT_TIMEOUT", String.valueOf(CONNECT_TIMEOUT_MS));
+            props.setProperty("oracle.net.CONNECT_TIMEOUT", String.valueOf(testTimeoutMillis > 0
+                    ? testTimeoutMillis : CONNECT_TIMEOUT_MS));
             props.setProperty("oracle.net.READ_TIMEOUT", String.valueOf(networkMillis));
         }
-        DriverManager.setLoginTimeout(LOGIN_TIMEOUT);
+        DriverManager.setLoginTimeout(testTimeoutMillis > 0 ? testTimeoutMillis / 1000 : LOGIN_TIMEOUT);
         Connection conn = DriverManager.getConnection(withCompatParams(dialect.buildUrl(cfg), cfg), props);
         conn.setAutoCommit(false);
         applyNetworkTimeout(conn, networkMillis);
@@ -95,7 +108,7 @@ public final class ConnectionFactory {
     public static String test(ConnectionConfig cfg) throws SQLException {
         Connection conn = null;
         try {
-            conn = create(cfg);
+            conn = createForTest(cfg, 30);
             String name = conn.getMetaData().getDatabaseProductName();
             String version = conn.getMetaData().getDatabaseProductVersion();
             String user = conn.getMetaData().getUserName();

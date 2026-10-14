@@ -146,4 +146,46 @@ public class OracleTableDefinitionsTest {
         assertThrows(IOException.class, () -> OracleTableDefinitions.parse("CREATE TABLE T(ID NUMBER(10)"));
         assertThrows(IOException.class, () -> OracleTableDefinitions.parse("/* incomplete"));
     }
+
+    /** 普通字符列补充字符语义，显式单位和国家字符类型保持不变。 */
+    @Test public void oracleCharacterSemanticsAreExplicit() {
+        assertEquals("VARCHAR2(200 CHAR)", OracleColumnType.map("VARCHAR2(200)", DbType.ORACLE).sql());
+        assertEquals("VARCHAR(20 CHAR)", OracleColumnType.map("VARCHAR(20)", DbType.ORACLE).sql());
+        assertEquals("CHAR(10 CHAR)", OracleColumnType.map("CHAR(10)", DbType.ORACLE).sql());
+        for (String declaration : List.of("VARCHAR2(200 BYTE)", "VARCHAR2(200 CHAR)", "NVARCHAR2(200)", "NCHAR(10)")) {
+            assertEquals(declaration, OracleColumnType.map(declaration, DbType.ORACLE).sql());
+        }
+    }
+
+    /** 243 字节的中文值应能落入 200 字符列，短列不能被采样最小宽度误报。 */
+    @Test public void oracleDdlAcceptsMultibyteValuesAndShortColumns() throws Exception {
+        var csv = folder.newFile("demo.csv").toPath();
+        Files.writeString(csv, "NAME,CODE\n" + "中".repeat(81) + ",A\n");
+        Files.writeString(folder.getRoot().toPath().resolve("kb_docs_tables.sql"),
+                "CREATE TABLE KB_DOCS.DEMO(NAME VARCHAR2(200), CODE CHAR(1));");
+        var meta = CsvMetaReader.read(csv.toFile(), StandardCharsets.UTF_8);
+        var dialect = DialectFactory.get(DbType.ORACLE);
+        List<String> logs = new ArrayList<>();
+        new OracleTableDefinitions().apply(new CsvTable(csv.toFile()), meta, StandardCharsets.UTF_8,
+                dialect, "PDMS_TEST", logs::add);
+        String ddl = DdlBuilder.build(dialect, "PDMS_TEST", "DEMO", meta);
+        assertTrue(ddl.contains("\"PDMS_TEST\".\"DEMO\""));
+        assertTrue(ddl.contains("\"NAME\" VARCHAR2(200 CHAR)"));
+        assertTrue(ddl.contains("\"CODE\" CHAR(1 CHAR)"));
+        assertTrue(logs.stream().anyMatch(s -> s.contains("DEMO.NAME") && s.contains("未指定长度单位")));
+    }
+
+    /** 实际字符数超过脚本声明时在建表前报错，不静默截断或扩列。 */
+    @Test public void oracleRejectsObservedCharacterOverflow() throws Exception {
+        var csv = folder.newFile("demo.csv").toPath();
+        Files.writeString(csv, "NAME\n" + "中".repeat(201) + "\n");
+        Files.writeString(folder.getRoot().toPath().resolve("kb_docs_tables.sql"),
+                "CREATE TABLE DEMO(NAME VARCHAR2(200));");
+        var meta = CsvMetaReader.read(csv.toFile(), StandardCharsets.UTF_8);
+        IOException error = assertThrows(IOException.class, () -> new OracleTableDefinitions().apply(
+                new CsvTable(csv.toFile()), meta, StandardCharsets.UTF_8,
+                DialectFactory.get(DbType.ORACLE), "PDMS_TEST", s -> {}));
+        assertTrue(error.getMessage().contains("DEMO.NAME"));
+        assertTrue(error.getMessage().contains("201"));
+    }
 }

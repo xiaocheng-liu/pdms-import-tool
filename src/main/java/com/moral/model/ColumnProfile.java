@@ -8,6 +8,7 @@ public class ColumnProfile {
     private final String name;
     private InferredType type = InferredType.STRING;
     private int maxLength = 1;
+    private int observedMaxCharacters;
     private String declaredSqlType;
 
     /** 从 Oracle 建表定义转换得到的目标类型，空值表示继续使用采样。 */
@@ -42,5 +43,15 @@ public class ColumnProfile {
 
     public void setMaxLength(int maxLength) {
         this.maxLength = Math.max(1, maxLength);
+    }
+
+    /** 实际采样字符数，不包含推断列宽的最小值和扩容余量。 */
+    public int getObservedMaxCharacters() {
+        return observedMaxCharacters;
+    }
+
+    /** 按 Unicode 码点累计实际长度，避免补充字符被当作两个字符。 */
+    public void observeCharacters(String value) {
+        observedMaxCharacters = Math.max(observedMaxCharacters, value.codePointCount(0, value.length()));
     }
 }

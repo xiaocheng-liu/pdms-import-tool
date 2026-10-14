@@ -30,14 +30,14 @@ public class DdlPreviewDialog extends JDialog {
     public DdlPreviewDialog(Frame owner, Map<String, String> ddlMap) {
         super(owner, "建表语句预览（可编辑）", true);
         this.ddlMap = new LinkedHashMap<>(ddlMap);
-        setLayout(new BorderLayout(8, 8));
+        setLayout(new BorderLayout());
 
         List<String> names = new ArrayList<>(this.ddlMap.keySet());
         for (String name : names) {
             tableCombo.addItem(name);
         }
 
-        JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 8));
         topPanel.add(new JLabel("目标库中缺失的表："));
         topPanel.add(tableCombo);
         JButton applyButton = new JButton("保存修改");
@@ -46,7 +46,7 @@ public class DdlPreviewDialog extends JDialog {
         ddlArea.setFont(new java.awt.Font(java.awt.Font.MONOSPACED, java.awt.Font.PLAIN, 13));
         ddlArea.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
 
-        JPanel bottomPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        JPanel bottomPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 8));
         JButton okButton = new JButton("确认执行并导入");
         JButton cancelButton = new JButton("取消");
         bottomPanel.add(okButton);

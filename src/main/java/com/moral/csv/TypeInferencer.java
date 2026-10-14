@@ -63,6 +63,7 @@ public final class TypeInferencer {
                     continue;
                 }
                 hasValue[i] = true;
+                profiles.get(i).observeCharacters(value);
                 int length = value.length();
                 if (length > profiles.get(i).getMaxLength()) {
                     profiles.get(i).setMaxLength(length);

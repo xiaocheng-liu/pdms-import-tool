@@ -8,6 +8,7 @@ import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JSpinner;
+import javax.swing.JFormattedTextField;
 import javax.swing.SpinnerNumberModel;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
@@ -15,6 +16,9 @@ import java.awt.GridLayout;
 import java.awt.Insets;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.text.DecimalFormat;
+import javax.swing.text.NumberFormatter;
+import javax.swing.text.DefaultFormatterFactory;
 
 /**
  * 导入选项卡片：并发、批量、分片、编码、清表、极速模式与开关组。
@@ -36,6 +40,11 @@ public class OptionsPanel extends JPanel {
     private final JCheckBox sanitizeCrCheck = new JCheckBox("清洗未加引号的回车符");
 
     public OptionsPanel() {
+        configureNumberFormat(threadsSpinner);
+        configureNumberFormat(batchSpinner);
+        configureNumberFormat(shardSpinner);
+        configureNumberFormat(maxShardsSpinner);
+        configureNumberFormat(writeTimeoutSpinner);
         setBorder(BorderFactory.createTitledBorder("导入选项"));
         setLayout(new GridBagLayout());
 
@@ -115,6 +124,16 @@ public class OptionsPanel extends JPanel {
                 + "「unquoted carriage return found in data」并降级为标准写入，标准模式也会把该行拆成两行<br>"
                 + "勾选后：引号外的裸回车符会被替换为空格，行结构保持不变，可继续走极速模式<br>"
                 + "注意：这会改动原始字段内容，日志会提示替换数量</html>");
+    }
+
+    /** 数字选项按编号显示，不使用千分位分组。 */
+    private static void configureNumberFormat(JSpinner spinner) {
+        JFormattedTextField editor = ((JSpinner.DefaultEditor) spinner.getEditor()).getTextField();
+        NumberFormatter formatter = new NumberFormatter(new DecimalFormat("0"));
+        formatter.setAllowsInvalid(false);
+        formatter.setCommitsOnValidEdit(true);
+        formatter.setValueClass(Integer.class);
+        editor.setFormatterFactory(new DefaultFormatterFactory(formatter));
     }
 
     /** 标签禁止被压缩，避免窄窗口下显示成省略号 */

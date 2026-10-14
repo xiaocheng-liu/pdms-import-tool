@@ -12,6 +12,7 @@ import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.JSpinner;
 import javax.swing.JPasswordField;
 import javax.swing.JTextField;
 import javax.swing.JToggleButton;
@@ -21,6 +22,10 @@ import java.awt.FlowLayout;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import javax.swing.SpinnerNumberModel;
+import javax.swing.JFormattedTextField;
+import javax.swing.text.NumberFormatter;
+import javax.swing.text.DefaultFormatterFactory;
 
 /**
  * 数据库连接配置卡片。
@@ -29,7 +34,8 @@ public class ConnectionPanel extends JPanel {
 
     private final JComboBox<DbType> typeCombo = new JComboBox<>(DbType.values());
     private final JTextField hostField = new JTextField("127.0.0.1");
-    private final JTextField portField = new JTextField(String.valueOf(DbType.ORACLE.getDefaultPort()));
+    private final JSpinner portField = new JSpinner(new SpinnerNumberModel(
+            DbType.ORACLE.getDefaultPort(), 1, 65535, 1));
     private final JTextField databaseField = new JTextField();
     private final JTextField userField = new JTextField();
     private final JPasswordField passwordField = new JPasswordField();
@@ -55,7 +61,16 @@ public class ConnectionPanel extends JPanel {
 
         int row = 0;
         addRow(labelConstraints, fieldConstraints, row++, "类型", typeCombo);
-        portField.setColumns(5);
+        portField.setPreferredSize(new Dimension(70, portField.getPreferredSize().height));
+        // 端口号是编号，不使用千分位分组显示。
+        JFormattedTextField portEditor = ((JSpinner.DefaultEditor) portField.getEditor()).getTextField();
+        NumberFormatter formatter = new NumberFormatter(new java.text.DecimalFormat("0"));
+        formatter.setAllowsInvalid(false);
+        formatter.setCommitsOnValidEdit(true);
+        formatter.setValueClass(Integer.class);
+        formatter.setMinimum(1);
+        formatter.setMaximum(65535);
+        portEditor.setFormatterFactory(new DefaultFormatterFactory(formatter));
         addRow(labelConstraints, fieldConstraints, row++, "主机",
                 pairedFields(hostField, "端口", portField, 0));
         addRow(labelConstraints, fieldConstraints, row++, null, databaseLabel, databaseField);
@@ -104,7 +119,7 @@ public class ConnectionPanel extends JPanel {
     }
 
     /** 将两个相关输入框放在一行，端口保持固定宽度。 */
-    private JPanel pairedFields(JTextField first, String label, JTextField second, double secondWeight) {
+    private JPanel pairedFields(java.awt.Component first, String label, java.awt.Component second, double secondWeight) {
         JPanel panel = new JPanel(new GridBagLayout());
         GridBagConstraints constraints = new GridBagConstraints();
         constraints.fill = GridBagConstraints.HORIZONTAL;
@@ -140,9 +155,9 @@ public class ConnectionPanel extends JPanel {
             return;
         }
         databaseLabel.setText(type.getDatabaseLabel());
-        String currentPort = portField.getText().trim();
-        if (currentPort.isEmpty() || isDefaultPort(currentPort)) {
-            portField.setText(String.valueOf(type.getDefaultPort()));
+        String currentPort = String.valueOf(portField.getValue());
+        if (isDefaultPort(currentPort)) {
+            portField.setValue(type.getDefaultPort());
         }
         // MySQL 没有独立 schema 概念：库名即 schema，Schema 一栏不参与连接与建表
         boolean mysql = type == DbType.MYSQL;
@@ -169,7 +184,7 @@ public class ConnectionPanel extends JPanel {
         ConnectionConfig config = new ConnectionConfig();
         config.setDbType((DbType) typeCombo.getSelectedItem());
         config.setHost(hostField.getText().trim());
-        config.setPort(parsePort(portField.getText()));
+        config.setPort((Integer) portField.getValue());
         config.setDatabase(databaseField.getText().trim());
         config.setUser(userField.getText().trim());
         config.setPassword(new String(passwordField.getPassword()));
@@ -181,20 +196,12 @@ public class ConnectionPanel extends JPanel {
     public void applyConfig(ConnectionConfig config) {
         typeCombo.setSelectedItem(config.getDbType());
         hostField.setText(config.getHost());
-        portField.setText(String.valueOf(config.getPort()));
+        portField.setValue(Math.max(1, Math.min(65535, config.getPort())));
         databaseField.setText(config.getDatabase());
         userField.setText(config.getUser());
         passwordField.setText(config.getPassword());
         schemaField.setText(config.getSchema());
         databaseLabel.setText(config.getDbType().getDatabaseLabel());
-    }
-
-    private int parsePort(String text) {
-        try {
-            return Integer.parseInt(text.trim());
-        } catch (NumberFormatException ignore) {
-            return 0;
-        }
     }
 
     private void testConnection() {

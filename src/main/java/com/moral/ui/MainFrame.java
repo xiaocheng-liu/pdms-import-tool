@@ -200,6 +200,7 @@ public class MainFrame extends JFrame {
         component.setMaximumSize(new Dimension(Integer.MAX_VALUE, preferred.height));
     }
 
+    /** 标题与数据库支持说明同排显示，垂直居中。 */
     private JPanel buildHeader() {
         JPanel header = new JPanel(new BorderLayout(8, 4));
         JLabel title = new JLabel("PDMS 数据导入工具");
@@ -208,9 +209,12 @@ public class MainFrame extends JFrame {
         subtitle.setFont(subtitle.getFont().deriveFont(Font.PLAIN, 12f));
 
         JPanel textPanel = new JPanel();
-        textPanel.setLayout(new BoxLayout(textPanel, BoxLayout.Y_AXIS));
+        textPanel.setLayout(new BoxLayout(textPanel, BoxLayout.X_AXIS));
         textPanel.setOpaque(false);
+        title.setAlignmentY(CENTER_ALIGNMENT);
+        subtitle.setAlignmentY(CENTER_ALIGNMENT);
         textPanel.add(title);
+        textPanel.add(javax.swing.Box.createHorizontalStrut(16));
         textPanel.add(subtitle);
 
         header.add(textPanel, BorderLayout.WEST);
