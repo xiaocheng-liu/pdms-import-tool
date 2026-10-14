@@ -12,6 +12,7 @@ import com.moral.task.ProgressListener;
 import com.moral.util.ConfigStore;
 import com.moral.util.FileSizeUtil;
 import com.moral.util.SwingUtil;
+import com.moral.util.UiTheme;
 
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
@@ -86,6 +87,7 @@ public class MainFrame extends JFrame {
         JPanel root = new JPanel(new BorderLayout(8, 8));
         root.setBorder(javax.swing.BorderFactory.createEmptyBorder(8, 10, 10, 10));
         setContentPane(root);
+        UiTheme.appBackground(root);
 
         root.add(buildHeader(), BorderLayout.NORTH);
 
@@ -140,6 +142,7 @@ public class MainFrame extends JFrame {
      */
     private JPanel buildConfigPanel() {
         JPanel rightPanel = new JPanel();
+        rightPanel.setOpaque(false);
         rightPanel.setLayout(new BoxLayout(rightPanel, BoxLayout.Y_AXIS));
         folderPanel.setAlignmentX(LEFT_ALIGNMENT);
         optionsPanel.setAlignmentX(LEFT_ALIGNMENT);
@@ -155,6 +158,7 @@ public class MainFrame extends JFrame {
 
         // 使用支持"宽度跟随视口"的面板，避免宽度溢出导致右侧按钮被裁掉
         JPanel panel = new ScrollablePanel(new BorderLayout(10, 0));
+        UiTheme.appBackground(panel);
         panel.add(connectionPanel, BorderLayout.WEST);
         panel.add(rightPanel, BorderLayout.CENTER);
         return panel;
@@ -203,10 +207,13 @@ public class MainFrame extends JFrame {
     /** 标题与数据库支持说明同排显示，垂直居中。 */
     private JPanel buildHeader() {
         JPanel header = new JPanel(new BorderLayout(8, 4));
+        header.setOpaque(false);
         JLabel title = new JLabel("PDMS 数据导入工具");
         title.setFont(title.getFont().deriveFont(Font.BOLD, 20f));
+        title.setForeground(UiTheme.TEXT_PRIMARY);
         JLabel subtitle = new JLabel("Oracle / PostgreSQL / 达梦 / 人大金仓 / MySQL · CSV 文件夹批量并发导入");
         subtitle.setFont(subtitle.getFont().deriveFont(Font.PLAIN, 12f));
+        UiTheme.muted(subtitle);
 
         JPanel textPanel = new JPanel();
         textPanel.setLayout(new BoxLayout(textPanel, BoxLayout.X_AXIS));
@@ -224,16 +231,25 @@ public class MainFrame extends JFrame {
     /** 操作与进度同排，详细状态独占下一行。 */
     private JPanel buildActionBar() {
         JPanel actionBar = new JPanel(new BorderLayout(10, 4));
+        actionBar.setOpaque(false);
         JPanel actionPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        actionPanel.setOpaque(false);
+        // 主操作强调、停止为危险操作、导出为常规按钮
+        UiTheme.primary(startButton);
+        UiTheme.danger(stopButton);
         actionPanel.add(startButton);
         actionPanel.add(stopButton);
         actionPanel.add(exportButton);
 
         JPanel controls = new JPanel(new BorderLayout(10, 0));
+        controls.setOpaque(false);
         totalProgress.setStringPainted(true);
+        totalProgress.setForeground(UiTheme.ACCENT);
         controls.add(actionPanel, BorderLayout.WEST);
         controls.add(totalProgress, BorderLayout.CENTER);
         totalLabel.setMinimumSize(new Dimension(0, totalLabel.getPreferredSize().height));
+        totalLabel.setFont(totalLabel.getFont().deriveFont(Font.PLAIN, 12f));
+        UiTheme.muted(totalLabel);
         actionBar.add(controls, BorderLayout.CENTER);
         actionBar.add(totalLabel, BorderLayout.SOUTH);
 

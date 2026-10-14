@@ -2,8 +2,8 @@ package com.moral.ui;
 
 import com.moral.util.FileSizeUtil;
 import com.moral.util.PlatformUtil;
+import com.moral.util.UiTheme;
 
-import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
@@ -25,7 +25,7 @@ public class FolderPanel extends JPanel {
     private final JLabel statsLabel = new JLabel("尚未扫描");
 
     public FolderPanel() {
-        setBorder(BorderFactory.createTitledBorder("数据源文件夹"));
+        setBorder(UiTheme.cardBorder("数据源文件夹"));
         setLayout(new BorderLayout(8, 4));
 
         dirField.setColumns(12);
@@ -34,9 +34,13 @@ public class FolderPanel extends JPanel {
         dirField.setMinimumSize(new Dimension(120, dirField.getPreferredSize().height));
 
         JPanel topPanel = new JPanel(new BorderLayout(8, 0));
+        topPanel.setOpaque(false);
         topPanel.add(dirField, BorderLayout.CENTER);
         // 按钮等宽排列，避免窄窗口下换行或挤压导致按钮不可见
         JPanel buttonPanel = new JPanel(new GridLayout(1, 2, 6, 0));
+        buttonPanel.setOpaque(false);
+        // 扫描是本卡片的主操作，强调显示
+        UiTheme.primary(scanButton);
         buttonPanel.add(chooseButton);
         buttonPanel.add(scanButton);
         int buttonHeight = Math.max(28, chooseButton.getPreferredSize().height);
@@ -44,6 +48,7 @@ public class FolderPanel extends JPanel {
         topPanel.add(buttonPanel, BorderLayout.EAST);
 
         statsLabel.setText("提示：文件名即表名，先选择文件夹再点「扫描 CSV」");
+        UiTheme.muted(statsLabel);
 
         add(topPanel, BorderLayout.NORTH);
         add(statsLabel, BorderLayout.SOUTH);

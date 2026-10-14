@@ -1,5 +1,7 @@
 package com.moral.ui;
 
+import com.moral.util.UiTheme;
+
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
@@ -38,17 +40,21 @@ public class DdlPreviewDialog extends JDialog {
         }
 
         JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 8));
+        topPanel.setOpaque(false);
         topPanel.add(new JLabel("目标库中缺失的表："));
         topPanel.add(tableCombo);
         JButton applyButton = new JButton("保存修改");
         topPanel.add(applyButton);
 
-        ddlArea.setFont(new java.awt.Font(java.awt.Font.MONOSPACED, java.awt.Font.PLAIN, 13));
+        ddlArea.setFont(UiTheme.monoFont());
         ddlArea.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
 
         JPanel bottomPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 8));
+        bottomPanel.setOpaque(false);
         JButton okButton = new JButton("确认执行并导入");
         JButton cancelButton = new JButton("取消");
+        // 确认执行会真正建表并导入，作为主操作强调
+        UiTheme.primary(okButton);
         bottomPanel.add(okButton);
         bottomPanel.add(cancelButton);
 

@@ -3,6 +3,7 @@ package com.moral.ui;
 import com.moral.model.CsvTable;
 import com.moral.model.TableStatus;
 import com.moral.util.FileSizeUtil;
+import com.moral.util.UiTheme;
 
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
@@ -18,6 +19,9 @@ import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -35,11 +39,12 @@ public class TableListPanel extends JPanel {
 
     /** 创建表清单，并为至少六行数据预留高度。 */
     public TableListPanel() {
-        setBorder(BorderFactory.createTitledBorder("表清单"));
+        setBorder(UiTheme.cardBorder("表清单"));
         setLayout(new BorderLayout(4, 4));
 
-        table.setRowHeight(26);
+        table.setRowHeight(28);
         table.setAutoCreateRowSorter(true);
+        table.getColumnModel().getColumn(3).setCellRenderer(new StatusRenderer());
         table.getColumnModel().getColumn(4).setCellRenderer(new ProgressRenderer());
         table.getColumnModel().getColumn(0).setPreferredWidth(50);
         table.getColumnModel().getColumn(0).setMaxWidth(60);
@@ -47,6 +52,7 @@ public class TableListPanel extends JPanel {
         table.getColumnModel().getColumn(8).setPreferredWidth(260);
 
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        buttonPanel.setOpaque(false);
         JButton selectAllButton = new JButton("全选");
         JButton selectNoneButton = new JButton("全不选");
         JButton invertButton = new JButton("反选");
@@ -65,7 +71,9 @@ public class TableListPanel extends JPanel {
         });
 
         JPanel bottomPanel = new JPanel(new BorderLayout());
+        bottomPanel.setOpaque(false);
         bottomPanel.add(buttonPanel, BorderLayout.WEST);
+        UiTheme.muted(summaryLabel);
         bottomPanel.add(summaryLabel, BorderLayout.EAST);
 
         add(new JScrollPane(table), BorderLayout.CENTER);
@@ -196,11 +204,48 @@ public class TableListPanel extends JPanel {
         }
     }
 
+    /** 状态单元格：按状态着色的圆角标签 */
+    private static final class StatusRenderer extends JLabel implements TableCellRenderer {
+
+        private static final int ARC = 12;
+
+        StatusRenderer() {
+            setOpaque(false);
+            setHorizontalAlignment(CENTER);
+            setBorder(BorderFactory.createEmptyBorder(2, 8, 2, 8));
+        }
+
+        @Override
+        public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected,
+                                                      boolean hasFocus, int row, int column) {
+            TableStatus status = statusOf(value);
+            setText(status.getLabel());
+            setForeground(colorOf(status));
+            return this;
+        }
+
+        /** 先画一个状态色淡底圆角块，再画文字，形成标签效果 */
+        @Override
+        protected void paintComponent(Graphics g) {
+            Color color = getForeground();
+            Graphics2D g2 = (Graphics2D) g.create();
+            try {
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 30));
+                g2.fillRoundRect(0, 1, getWidth() - 1, getHeight() - 3, ARC, ARC);
+            } finally {
+                g2.dispose();
+            }
+            super.paintComponent(g);
+        }
+    }
+
     /** 进度条单元格 */
     private static final class ProgressRenderer extends JProgressBar implements TableCellRenderer {
         ProgressRenderer() {
             setStringPainted(true);
             setBorderPainted(false);
+            setBorder(BorderFactory.createEmptyBorder(3, 6, 3, 6));
         }
 
         @Override
@@ -208,39 +253,45 @@ public class TableListPanel extends JPanel {
                                                       boolean hasFocus, int row, int column) {
             int percent = value instanceof Integer ? (Integer) value : 0;
             setValue(percent);
-            TableStatus status = TableStatus.PENDING;
-            Object statusValue = table.getValueAt(row, 3);
-            if (statusValue instanceof String) {
-                for (TableStatus item : TableStatus.values()) {
-                    if (item.getLabel().equals(statusValue)) {
-                        status = item;
-                        break;
-                    }
-                }
-            }
+            TableStatus status = statusOf(table.getValueAt(row, 3));
             // 数据已读完但仍在进行中，说明在等待数据库提交，给出明确提示
             if (status == TableStatus.RUNNING && percent >= 100) {
                 setString("提交中...");
             } else {
                 setString(percent + "%");
             }
-            setForeground(foregroundOf(status));
+            setForeground(colorOf(status));
             return this;
         }
+    }
 
-        private Color foregroundOf(TableStatus status) {
-            switch (status) {
-                case SUCCESS:
-                    return new Color(0x22C55E);
-                case FAILED:
-                    return new Color(0xEF4444);
-                case RUNNING:
-                    return new Color(0x3B82F6);
-                case CANCELLED:
-                    return new Color(0xF59E0B);
-                default:
-                    return new Color(0x64748B);
+    /** 状态列的值是状态中文名，反查枚举；无法识别时按待导入处理 */
+    private static TableStatus statusOf(Object value) {
+        if (value instanceof TableStatus status) {
+            return status;
+        }
+        String label = String.valueOf(value);
+        for (TableStatus status : TableStatus.values()) {
+            if (status.getLabel().equals(label)) {
+                return status;
             }
+        }
+        return TableStatus.PENDING;
+    }
+
+    /** 状态与进度条共用的配色 */
+    private static Color colorOf(TableStatus status) {
+        switch (status) {
+            case SUCCESS:
+                return UiTheme.STATUS_SUCCESS;
+            case FAILED:
+                return UiTheme.STATUS_ERROR;
+            case RUNNING:
+                return UiTheme.STATUS_RUNNING;
+            case CANCELLED:
+                return UiTheme.STATUS_WARN;
+            default:
+                return UiTheme.STATUS_PENDING;
         }
     }
 }

@@ -1,8 +1,8 @@
 package com.moral.ui;
 
 import com.moral.model.ImportOptions;
+import com.moral.util.UiTheme;
 
-import javax.swing.BorderFactory;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JLabel;
@@ -45,7 +45,7 @@ public class OptionsPanel extends JPanel {
         configureNumberFormat(shardSpinner);
         configureNumberFormat(maxShardsSpinner);
         configureNumberFormat(writeTimeoutSpinner);
-        setBorder(BorderFactory.createTitledBorder("导入选项"));
+        setBorder(UiTheme.cardBorder("导入选项"));
         setLayout(new GridBagLayout());
 
         GridBagConstraints constraints = new GridBagConstraints();
@@ -100,6 +100,7 @@ public class OptionsPanel extends JPanel {
 
         // 字段处理开关单独一行，保证最小窗口宽度下完整显示
         JPanel checkPanel = new JPanel(new GridLayout(0, 3, 8, 2));
+        checkPanel.setOpaque(false);
         checkPanel.add(emptyAsNullCheck);
         checkPanel.add(continueOnErrorCheck);
         checkPanel.add(sanitizeCrCheck);

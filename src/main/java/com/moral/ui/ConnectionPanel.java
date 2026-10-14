@@ -6,8 +6,8 @@ import com.moral.model.ConnectionConfig;
 import com.moral.model.DbType;
 import com.moral.util.PasswordVisibilityIcon;
 import com.moral.util.SwingUtil;
+import com.moral.util.UiTheme;
 
-import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JLabel;
@@ -47,7 +47,7 @@ public class ConnectionPanel extends JPanel {
 
     /** 创建紧凑连接表单，相关字段同排显示。 */
     public ConnectionPanel() {
-        setBorder(BorderFactory.createTitledBorder("数据库连接"));
+        setBorder(UiTheme.cardBorder("数据库连接"));
         setLayout(new GridBagLayout());
 
         GridBagConstraints labelConstraints = new GridBagConstraints();
@@ -61,9 +61,10 @@ public class ConnectionPanel extends JPanel {
 
         int row = 0;
         addRow(labelConstraints, fieldConstraints, row++, "类型", typeCombo);
-        portField.setPreferredSize(new Dimension(70, portField.getPreferredSize().height));
-        // 端口号是编号，不使用千分位分组显示。
+        // 端口号最大 5 位（65535），按字符数预留宽度并锁定最小宽度，避免窄窗口下被截
         JFormattedTextField portEditor = ((JSpinner.DefaultEditor) portField.getEditor()).getTextField();
+        portEditor.setColumns(6);
+        // 端口号是编号，不使用千分位分组显示。
         NumberFormatter formatter = new NumberFormatter(new java.text.DecimalFormat("0"));
         formatter.setAllowsInvalid(false);
         formatter.setCommitsOnValidEdit(true);
@@ -71,6 +72,9 @@ public class ConnectionPanel extends JPanel {
         formatter.setMinimum(1);
         formatter.setMaximum(65535);
         portEditor.setFormatterFactory(new DefaultFormatterFactory(formatter));
+        int portHeight = portField.getPreferredSize().height;
+        portField.setPreferredSize(new Dimension(96, portHeight));
+        portField.setMinimumSize(new Dimension(96, portHeight));
         addRow(labelConstraints, fieldConstraints, row++, "主机",
                 pairedFields(hostField, "端口", portField, 0));
         addRow(labelConstraints, fieldConstraints, row++, null, databaseLabel, databaseField);
@@ -83,13 +87,18 @@ public class ConnectionPanel extends JPanel {
                 pairedFields(userField, "密码", passwordField, 1));
         addRow(labelConstraints, fieldConstraints, row++, "Schema", schemaField);
 
+        // 测试连接是本卡片的主操作，强调显示
+        UiTheme.primary(testButton);
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        buttonPanel.setOpaque(false);
         buttonPanel.add(testButton);
         buttonPanel.add(saveButton);
         JPanel actions = new JPanel(new BorderLayout(8, 0));
+        actions.setOpaque(false);
         actions.add(buttonPanel, BorderLayout.WEST);
         statusLabel.setMinimumSize(new Dimension(0, statusLabel.getPreferredSize().height));
         statusLabel.setPreferredSize(new Dimension(100, statusLabel.getPreferredSize().height));
+        UiTheme.muted(statusLabel);
         actions.add(statusLabel, BorderLayout.CENTER);
 
         GridBagConstraints buttonConstraints = new GridBagConstraints();
@@ -121,6 +130,7 @@ public class ConnectionPanel extends JPanel {
     /** 将两个相关输入框放在一行，端口保持固定宽度。 */
     private JPanel pairedFields(java.awt.Component first, String label, java.awt.Component second, double secondWeight) {
         JPanel panel = new JPanel(new GridBagLayout());
+        panel.setOpaque(false);
         GridBagConstraints constraints = new GridBagConstraints();
         constraints.fill = GridBagConstraints.HORIZONTAL;
         constraints.weightx = 1;
@@ -230,7 +240,7 @@ public class ConnectionPanel extends JPanel {
         statusLabel.setText(text);
         statusLabel.setToolTipText(text);
         // 成功绿、失败红，便于快速识别连接状态
-        statusLabel.setForeground(ok ? new java.awt.Color(0x22C55E) : new java.awt.Color(0xEF4444));
+        statusLabel.setForeground(ok ? UiTheme.STATUS_SUCCESS : UiTheme.STATUS_ERROR);
     }
 
     public JButton getSaveButton() {

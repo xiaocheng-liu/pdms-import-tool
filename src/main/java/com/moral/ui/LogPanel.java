@@ -1,6 +1,7 @@
 package com.moral.ui;
 
-import javax.swing.BorderFactory;
+import com.moral.util.UiTheme;
+
 import javax.swing.JButton;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
@@ -23,10 +24,10 @@ public class LogPanel extends JPanel {
 
     /** 日志级别（配色按浅色背景选，保证白底可读） */
     public enum Level {
-        INFO(new Color(0x1F2937)),
-        SUCCESS(new Color(0x16A34A)),
-        WARN(new Color(0xD97706)),
-        ERROR(new Color(0xDC2626));
+        INFO(UiTheme.TEXT_PRIMARY),
+        SUCCESS(UiTheme.STATUS_SUCCESS),
+        WARN(UiTheme.STATUS_WARN),
+        ERROR(UiTheme.STATUS_ERROR);
 
         private final Color color;
 
@@ -45,12 +46,15 @@ public class LogPanel extends JPanel {
     private final JTextPane textPane = new JTextPane();
 
     public LogPanel() {
-        setBorder(BorderFactory.createTitledBorder("运行日志"));
+        setBorder(UiTheme.cardBorder("运行日志"));
         setLayout(new BorderLayout(4, 4));
         textPane.setEditable(false);
+        textPane.setBackground(UiTheme.CARD_BG);
+        textPane.setFont(UiTheme.monoFont());
         add(new JScrollPane(textPane), BorderLayout.CENTER);
 
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+        buttonPanel.setOpaque(false);
         JButton clearButton = new JButton("清空日志");
         clearButton.addActionListener(event -> clear());
         buttonPanel.add(clearButton);
@@ -58,12 +62,17 @@ public class LogPanel extends JPanel {
     }
 
     public void append(String message, Level level) {
-        String line = "[" + LocalTime.now().format(TIME_FORMAT) + "] " + message + "\n";
+        // 时间戳弱化显示，正文按级别着色
+        String time = "[" + LocalTime.now().format(TIME_FORMAT) + "] ";
+        String line = message + "\n";
         Runnable task = () -> {
             StyledDocument document = textPane.getStyledDocument();
+            SimpleAttributeSet timeAttributes = new SimpleAttributeSet();
+            StyleConstants.setForeground(timeAttributes, UiTheme.TEXT_SECONDARY);
             SimpleAttributeSet attributes = new SimpleAttributeSet();
             StyleConstants.setForeground(attributes, level.getColor());
             try {
+                document.insertString(document.getLength(), time, timeAttributes);
                 document.insertString(document.getLength(), line, attributes);
                 if (document.getLength() > MAX_CHARS) {
                     document.remove(0, document.getLength() - MAX_CHARS);

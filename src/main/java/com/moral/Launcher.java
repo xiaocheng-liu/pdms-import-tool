@@ -3,11 +3,11 @@ package com.moral;
 import com.moral.ui.MainFrame;
 import com.moral.util.AppIcons;
 import com.moral.util.PlatformUtil;
+import com.moral.util.UiTheme;
 import com.formdev.flatlaf.FlatLightLaf;
 
 import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
-import javax.swing.UIManager;
 
 /**
  * 程序入口：初始化跨平台 UI 环境并打开主窗口。
@@ -19,7 +19,9 @@ public final class Launcher {
 
     public static void main(String[] args) {
         try {
-            UIManager.setLookAndFeel(new FlatLightLaf());
+            // setup() 会完整初始化 UI defaults，之后才能覆盖主题键
+            FlatLightLaf.setup();
+            UiTheme.install();
         } catch (Exception ignore) {
             // 主题设置失败时使用系统默认外观
         }
