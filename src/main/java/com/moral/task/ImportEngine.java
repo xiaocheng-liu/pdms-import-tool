@@ -10,11 +10,13 @@ import com.moral.db.ConnectionFactory;
 import com.moral.db.Dialect;
 import com.moral.db.DialectFactory;
 import com.moral.db.ProtocolCompat;
+import com.moral.db.TargetColumnTypes;
 import com.moral.model.ConnectionConfig;
 import com.moral.model.CsvTable;
 import com.moral.model.DbType;
 import com.moral.model.ImportOptions;
 import com.moral.model.ImportResult;
+import com.moral.model.SchemaPlan;
 import com.moral.model.TableProgress;
 import com.moral.model.TableStatus;
 import com.moral.util.FileSizeUtil;
@@ -141,6 +143,16 @@ public final class ImportEngine {
         return ddlMap;
     }
 
+    /** 生成包含建表、扩长、提示和失败结果的逐表计划，预检不执行 DDL。 */
+    public SchemaPlan prepareSchema(List<CsvTable> tables, ConnectionConfig config,
+                                     ImportOptions options, Consumer<String> logger) throws Exception {
+        Dialect dialect = DialectFactory.get(config.getDbType());
+        ProtocolCompat.detectOnce(config, logger);
+        try (Connection connection = ConnectionFactory.create(config)) {
+            return SchemaPreparation.prepare(connection, dialect, config, options, tables, logger);
+        }
+    }
+
     /**
      * 执行导入（阻塞直到全部完成），应在后台线程调用。
      *
@@ -152,6 +164,15 @@ public final class ImportEngine {
                               ImportOptions options,
                               Map<String, String> ddlMap,
                               ProgressListener listener) throws Exception {
+        if (options.isSyncColumnLengths() || options.isAddMissingColumns() || options.isSyncComments()) {
+            throw new IllegalArgumentException("字段变更必须先生成并确认结构变更计划");
+        }
+        return startPrepared(tables, config, options, SchemaPlan.fromCreateSql(ddlMap), listener);
+    }
+
+    /** 执行已确认计划；检查失败或扩长失败的表在清表之前终止。 */
+    public ImportResult startPrepared(List<CsvTable> tables, ConnectionConfig config, ImportOptions options,
+                                       SchemaPlan plan, ProgressListener listener) throws Exception {
         cancelled.set(false);
         ImportResult result = new ImportResult();
         result.setTotalTables(tables.size());
@@ -214,31 +235,9 @@ public final class ImportEngine {
                     progress.start();
                     listener.onLog("开始导入 " + table.getTableName() + "（" + FileSizeUtil.formatSize(table.getSizeBytes()) + "）");
                     try {
-                        CsvMeta meta = CsvMetaReader.read(table.getFile(), options.getEncoding());
-                        if (!meta.isValid()) {
-                            throw new java.io.IOException("表头为空或解析失败");
-                        }
+                        CsvMeta meta = prepareTable(prepareConn, dialect, config, options, table, plan,
+                                definitions, listener);
                         String tableName = dialect.normalizeTableName(table.getTableName());
-
-                        boolean missing = !dialect.tableExists(prepareConn, config.getSchema(), tableName);
-                        if (missing && options.isAutoCreateTable() && ddlMap != null
-                                && ddlMap.containsKey(table.getTableName())) {
-                            definitions.apply(table, meta, options.getEncoding(), dialect, config.getSchema(), listener::onLog);
-                            ensureSchemaExists(prepareConn, dialect, config);
-                            executeDdl(prepareConn, ddlMap.get(table.getTableName()));
-                            listener.onLog("已创建表 " + dialect.fullyQualified(config.getSchema(), tableName));
-                            missing = !dialect.tableExists(prepareConn, config.getSchema(), tableName);
-                        }
-                        if (missing) {
-                            // 目标表不存在时不要等到各分片写库报错，此处直接给出可操作原因
-                            throw new java.sql.SQLException(
-                                    describeMissingTable(prepareConn, dialect, config, tableName));
-                        }
-
-                        if (options.getClearMode() != ImportOptions.ClearMode.NONE) {
-                            clearTable(prepareConn, dialect, config, tableName, options.getClearMode());
-                            listener.onLog("已清空表 " + tableName + "（" + options.getClearMode().getLabel() + "）");
-                        }
 
                         warnOversizedTextIndex(prepareConn, config.getDbType(), config.getSchema(), tableName,
                                 listener::onLog);
@@ -329,6 +328,55 @@ public final class ImportEngine {
             submittedTasks.clear();
             pool = null;
         }
+    }
+
+    /** 单表准备顺序固定为结构变更、结果验证、绑定刷新、清表；失败由调用方标记并跳过。 */
+    private CsvMeta prepareTable(Connection prepareConn, Dialect dialect, ConnectionConfig config,
+                                  ImportOptions options, CsvTable table, SchemaPlan plan,
+                                  OracleTableDefinitions definitions, ProgressListener listener) throws Exception {
+        SchemaPlan.Table tablePlan = plan.tables().get(table.getTableName());
+        if ((options.isSyncColumnLengths() || options.isAddMissingColumns() || options.isSyncComments()) && tablePlan == null) {
+            throw new SQLException("缺少该表已确认的结构预检结果");
+        }
+        if (tablePlan != null && !tablePlan.error().isEmpty()) {
+            throw new SQLException("结构检查失败：" + tablePlan.error());
+        }
+        CsvMeta meta = CsvMetaReader.read(table.getFile(), options.getEncoding());
+        if (!meta.isValid()) {
+            throw new java.io.IOException("表头为空或解析失败");
+        }
+        String tableName = dialect.normalizeTableName(table.getTableName());
+
+        boolean missing = !dialect.tableExists(prepareConn, config.getSchema(), tableName);
+        boolean newlyCreated = false;
+        SchemaComments.validateSession(prepareConn, tablePlan);
+        if (missing && options.isAutoCreateTable() && tablePlan != null
+                && tablePlan.createSql() != null) {
+            definitions.apply(table, meta, options.getEncoding(), dialect, config.getSchema(), listener::onLog);
+            ensureSchemaExists(prepareConn, dialect, config);
+            executeDdl(prepareConn, tablePlan.createSql());
+            newlyCreated = true;
+            listener.onLog("已创建表 " + dialect.fullyQualified(config.getSchema(), tableName));
+            missing = !dialect.tableExists(prepareConn, config.getSchema(), tableName);
+        }
+        if (missing) {
+            // 目标表不存在时不要等到各分片写库报错，此处直接给出可操作原因
+            throw new java.sql.SQLException(
+                    describeMissingTable(prepareConn, dialect, config, tableName));
+        }
+
+        if (options.isSyncColumnLengths() || options.isAddMissingColumns() || options.isSyncComments()) {
+            SchemaPreparation.applyChanges(prepareConn, dialect, config.getSchema(), tableName,
+                    tablePlan, listener::onLog, cancelled::get);
+        }
+        if (cancelled.get()) throw new SQLException("导入已取消", "57014");
+        TargetColumnTypes.apply(prepareConn, dialect, config.getSchema(), tableName, meta, newlyCreated);
+
+        if (options.getClearMode() != ImportOptions.ClearMode.NONE) {
+            clearTable(prepareConn, dialect, config, tableName, options.getClearMode());
+            listener.onLog("已清空表 " + tableName + "（" + options.getClearMode().getLabel() + "）");
+        }
+        return meta;
     }
 
     /** 极速模式说明文案 */
@@ -538,14 +586,7 @@ public final class ImportEngine {
         if (sql == null) {
             return;
         }
-        try (Statement statement = conn.createStatement()) {
-            statement.execute(sql);
-        }
-        try {
-            conn.commit();
-        } catch (SQLException ignore) {
-            // 部分库 DDL 为隐式提交，忽略
-        }
+        SchemaPreparation.executeDdl(conn, sql);
     }
 
     /**
@@ -564,14 +605,7 @@ public final class ImportEngine {
     }
 
     private void executeDdl(Connection conn, String ddl) throws java.sql.SQLException {
-        try (Statement statement = conn.createStatement()) {
-            statement.execute(ddl);
-        }
-        try {
-            conn.commit();
-        } catch (java.sql.SQLException ignore) {
-            // DDL 多为隐式提交，忽略
-        }
+        SchemaPreparation.executeDdl(conn, ddl);
     }
 
     /**

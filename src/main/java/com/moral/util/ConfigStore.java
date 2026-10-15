@@ -55,6 +55,9 @@ public final class ConfigStore {
         data.put("opt.emptyAsNull", String.valueOf(options.isEmptyAsNull()));
         data.put("opt.clearMode", options.getClearMode().name());
         data.put("opt.autoCreateTable", String.valueOf(options.isAutoCreateTable()));
+        data.put("opt.syncColumnLengths", String.valueOf(options.isSyncColumnLengths()));
+        data.put("opt.addMissingColumns", String.valueOf(options.isAddMissingColumns()));
+        data.put("opt.syncComments", String.valueOf(options.isSyncComments()));
         data.put("opt.continueOnError", String.valueOf(options.isContinueOnError()));
         data.put("opt.sanitizeCr", String.valueOf(options.isSanitizeCarriageReturn()));
         data.put("opt.writeTimeoutSeconds", String.valueOf(options.getWriteTimeoutSeconds()));
@@ -128,6 +131,9 @@ public final class ConfigStore {
         options.setEmptyAsNull(parseBoolean(data.get("opt.emptyAsNull"), options.isEmptyAsNull()));
         options.setClearMode(parseClearMode(data.get("opt.clearMode")));
         options.setAutoCreateTable(parseBoolean(data.get("opt.autoCreateTable"), options.isAutoCreateTable()));
+        options.setSyncColumnLengths(parseBoolean(data.get("opt.syncColumnLengths"), false));
+        options.setAddMissingColumns(parseBoolean(data.get("opt.addMissingColumns"), false));
+        options.setSyncComments(parseBoolean(data.get("opt.syncComments"), false));
         options.setContinueOnError(parseBoolean(data.get("opt.continueOnError"), options.isContinueOnError()));
         options.setSanitizeCarriageReturn(parseBoolean(data.get("opt.sanitizeCr"), options.isSanitizeCarriageReturn()));
         options.setWriteTimeoutSeconds(parseInt(data.get("opt.writeTimeoutSeconds"), options.getWriteTimeoutSeconds()));

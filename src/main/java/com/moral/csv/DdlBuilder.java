@@ -16,6 +16,12 @@ public final class DdlBuilder {
     }
 
     public static String build(Dialect dialect, String schema, String table, CsvMeta meta) {
+        return build(dialect, schema, table, meta, java.util.Map.of(), null);
+    }
+
+    /** MySQL 建表时直接附加已转义的源注释，其余调用保持原行为。 */
+    public static String build(Dialect dialect, String schema, String table, CsvMeta meta,
+                               java.util.Map<String, String> columnComments, String tableComment) {
         if (meta == null || !meta.isValid()) {
             throw new IllegalArgumentException("CSV 表头为空，无法生成建表语句");
         }
@@ -31,8 +37,11 @@ public final class DdlBuilder {
                     .append(dialect.quote(dialect.normalizeTableName(profile.getName())))
                     .append(" ")
                     .append(types.get(i));
+            String comment = columnComments.get(dialect.normalizeTableName(profile.getName()));
+            if (comment != null) sql.append(" COMMENT ").append(comment);
         }
         sql.append("\n)").append(dialect.createTableSuffix());
+        if (tableComment != null) sql.append(" COMMENT = ").append(tableComment);
         return sql.toString();
     }
     /** MySQL 按 utf8mb4 估算行宽，宽表优先把最长的 VARCHAR 转为 LONGTEXT。 */

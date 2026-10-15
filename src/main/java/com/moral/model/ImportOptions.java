@@ -43,6 +43,12 @@ public class ImportOptions {
     private ClearMode clearMode = ClearMode.NONE;
     /** 表不存在时自动建表 */
     private boolean autoCreateTable = false;
+    /** 按源脚本扩长已有字符字段，默认关闭。 */
+    private boolean syncColumnLengths;
+    /** 按源脚本补充缺失字段，默认关闭。 */
+    private boolean addMissingColumns;
+    /** 按源脚本同步表和字段注释，默认关闭。 */
+    private boolean syncComments;
     /** 单批失败时跳过并继续 */
     private boolean continueOnError = true;
     /**
@@ -148,6 +154,28 @@ public class ImportOptions {
     public void setAutoCreateTable(boolean autoCreateTable) {
         this.autoCreateTable = autoCreateTable;
     }
+
+    /** 是否在导入前比较并预览字符字段扩长。 */
+    public boolean isSyncColumnLengths() {
+        return syncColumnLengths;
+    }
+
+    /** 设置字符字段扩长开关。 */
+    public void setSyncColumnLengths(boolean syncColumnLengths) {
+        this.syncColumnLengths = syncColumnLengths;
+    }
+
+    /** 是否补充 CSV 使用且源脚本有定义的缺失字段。 */
+    public boolean isAddMissingColumns() { return addMissingColumns; }
+
+    /** 设置补充缺失字段开关。 */
+    public void setAddMissingColumns(boolean value) { addMissingColumns = value; }
+
+    /** 是否同步源脚本声明的数据库注释。 */
+    public boolean isSyncComments() { return syncComments; }
+
+    /** 设置注释同步开关。 */
+    public void setSyncComments(boolean value) { syncComments = value; }
 
     public boolean isContinueOnError() {
         return continueOnError;

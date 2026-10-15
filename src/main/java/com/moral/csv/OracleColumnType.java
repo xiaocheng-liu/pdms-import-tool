@@ -8,10 +8,10 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /** Oracle 列类型到目标数据库的转换结果，同时约束 JDBC 参数绑定类型。 */
-record OracleColumnType(String sql, InferredType binding) {
+public record OracleColumnType(String sql, InferredType binding) {
 
     /** 仅转换已支持的类型；不能可靠转换时返回 null，由调用方报告无法转换。 */
-    static OracleColumnType map(String declaration, DbType target) {
+    public static OracleColumnType map(String declaration, DbType target) {
         String type = declaration.toUpperCase(Locale.ROOT).replaceAll("\\s+", " ").trim()
                 .replaceAll("\\s*([(),])\\s*", "$1").replace("- ", "-");
         boolean oracle = target == DbType.ORACLE;

@@ -99,7 +99,7 @@ public class ConnectionPanel extends JPanel {
         statusLabel.setMinimumSize(new Dimension(0, statusLabel.getPreferredSize().height));
         statusLabel.setPreferredSize(new Dimension(100, statusLabel.getPreferredSize().height));
         UiTheme.muted(statusLabel);
-        actions.add(statusLabel, BorderLayout.CENTER);
+        actions.add(statusLabel, BorderLayout.SOUTH);
 
         GridBagConstraints buttonConstraints = new GridBagConstraints();
         buttonConstraints.gridx = 0;
@@ -110,21 +110,38 @@ public class ConnectionPanel extends JPanel {
         buttonConstraints.weightx = 1;
         add(actions, buttonConstraints);
 
+        GridBagConstraints space = new GridBagConstraints();
+        space.gridx = 0;
+        space.gridy = row + 1;
+        space.gridwidth = 2;
+        space.weighty = 1;
+        space.fill = GridBagConstraints.VERTICAL;
+        JPanel filler = new JPanel();
+        filler.setOpaque(false);
+        add(filler, space);
+
         typeCombo.addActionListener(event -> onTypeChanged());
         testButton.addActionListener(event -> testConnection());
     }
 
-    /** 为密码按钮设置隐藏和显示状态的图标。 */
+    /** 图标和提示表示点击后的动作，沿用原有密码切换行为。 */
     private void configurePasswordIcons() {
         for (java.awt.Component component : passwordField.getComponents()) {
             if (component instanceof JToggleButton button
                     && "PasswordField.revealButton".equals(button.getName())) {
-                button.setIcon(new PasswordVisibilityIcon(false));
-                button.setSelectedIcon(new PasswordVisibilityIcon(true));
-                button.setToolTipText("显示/隐藏密码");
-                button.getAccessibleContext().setAccessibleName("显示/隐藏密码");
+                button.setIcon(new PasswordVisibilityIcon(true));
+                button.setSelectedIcon(new PasswordVisibilityIcon(false));
+                updatePasswordAction(button);
+                button.addItemListener(event -> updatePasswordAction(button));
             }
         }
+    }
+
+    /** 同步悬停提示和无障碍名称。 */
+    private static void updatePasswordAction(JToggleButton button) {
+        String action = button.isSelected() ? "隐藏密码" : "显示密码";
+        button.setToolTipText(action);
+        button.getAccessibleContext().setAccessibleName(action);
     }
 
     /** 将两个相关输入框放在一行，端口保持固定宽度。 */

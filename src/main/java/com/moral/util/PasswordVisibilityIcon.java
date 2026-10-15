@@ -10,12 +10,12 @@ import java.awt.geom.Ellipse2D;
 import java.awt.geom.Line2D;
 import java.awt.geom.Path2D;
 
-/** 密码可见性图标：明文显示睁眼，隐藏显示带斜线的眼睛。 */
+/** 密码操作图标：显示密码用睁眼，隐藏密码用带斜线的眼睛。 */
 public final class PasswordVisibilityIcon extends FlatAbstractIcon {
 
     private final boolean visible;
 
-    /** 创建对应密码可见状态的图标，缩放由 FlatLaf 处理。 */
+    /** 创建对应目标可见状态的图标，缩放由 FlatLaf 处理。 */
     public PasswordVisibilityIcon(boolean visible) {
         super(16, 16, UIManager.getColor("PasswordField.revealIconColor"));
         this.visible = visible;

@@ -114,7 +114,7 @@ public class OracleDialect implements Dialect {
             case DOUBLE:
                 return "NUMBER(38, 8)";
             case DECIMAL:
-                return "NUMBER(38)";
+                return "NUMBER";
             case DATE:
                 return "DATE";
             case DATETIME:

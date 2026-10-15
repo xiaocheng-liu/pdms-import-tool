@@ -13,7 +13,6 @@ import javax.swing.text.StyleConstants;
 import javax.swing.text.StyledDocument;
 import java.awt.BorderLayout;
 import java.awt.Color;
-import java.awt.FlowLayout;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 
@@ -46,19 +45,25 @@ public class LogPanel extends JPanel {
     private final JTextPane textPane = new JTextPane();
 
     public LogPanel() {
-        setBorder(UiTheme.cardBorder("运行日志"));
+        setBorder(javax.swing.BorderFactory.createCompoundBorder(
+                javax.swing.BorderFactory.createLineBorder(UiTheme.BORDER),
+                javax.swing.BorderFactory.createEmptyBorder(5, 6, 6, 6)));
         setLayout(new BorderLayout(4, 4));
         textPane.setEditable(false);
         textPane.setBackground(UiTheme.CARD_BG);
         textPane.setFont(UiTheme.monoFont());
         add(new JScrollPane(textPane), BorderLayout.CENTER);
 
-        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+        JPanel buttonPanel = new JPanel(new BorderLayout(8, 0));
+        javax.swing.JLabel title = new javax.swing.JLabel("运行日志");
+        title.setFont(UiTheme.boldFont());
+        title.setForeground(UiTheme.TEXT_PRIMARY);
+        buttonPanel.add(title, BorderLayout.WEST);
         buttonPanel.setOpaque(false);
         JButton clearButton = new JButton("清空日志");
         clearButton.addActionListener(event -> clear());
-        buttonPanel.add(clearButton);
-        add(buttonPanel, BorderLayout.SOUTH);
+        buttonPanel.add(clearButton, BorderLayout.EAST);
+        add(buttonPanel, BorderLayout.NORTH);
     }
 
     public void append(String message, Level level) {

@@ -131,10 +131,10 @@ public class PgDialect implements Dialect {
             }
             columnPart.append(quote(normalizeTableName(columns.get(i))));
         }
-        // NULL '' 表示空字段写入 NULL；否则保留空字符串（默认 \N 表示 NULL）
-        String nullToken = emptyAsNull ? "" : "\\N";
+        // 两种引号形式遵循同一个空值选项，非空的 \N 始终作为原文保留。
+        String nullOption = emptyAsNull ? "FORCE_NULL" : "FORCE_NOT_NULL";
         return "COPY " + fullyQualified(schema, table) + " (" + columnPart + ") FROM STDIN WITH (FORMAT csv, HEADER "
-                + withHeader + ", NULL '" + nullToken + "')";
+                + withHeader + ", NULL '', " + nullOption + " (" + columnPart + "))";
     }
 
     @Override

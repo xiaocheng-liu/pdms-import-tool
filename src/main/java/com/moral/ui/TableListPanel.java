@@ -13,6 +13,7 @@ import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import javax.swing.JTable;
 import javax.swing.table.AbstractTableModel;
+import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.TableCellRenderer;
 import java.awt.BorderLayout;
 import java.awt.Color;
@@ -34,22 +35,43 @@ public class TableListPanel extends JPanel {
 
     private final List<CsvTable> tables = new ArrayList<>();
     private final CsvTableModel model = new CsvTableModel();
-    private final JTable table = new JTable(model);
+    private final JTable table = new JTable(model) {
+        /** 空列表显示下一步操作，避免初始界面只有大片空白。 */
+        @Override protected void paintComponent(Graphics graphics) {
+            super.paintComponent(graphics);
+            if (getRowCount() != 0) return;
+            Graphics2D g = (Graphics2D) graphics.create();
+            g.setColor(UiTheme.TEXT_SECONDARY);
+            g.setFont(UiTheme.bodyFont());
+            String text = "选择数据源文件夹，点击「扫描 CSV」加载表清单";
+            int x = Math.max(12, (getWidth() - g.getFontMetrics().stringWidth(text)) / 2);
+            int y = Math.max(g.getFontMetrics().getHeight(), (getHeight() + g.getFontMetrics().getAscent()) / 2);
+            g.drawString(text, x, y);
+            g.dispose();
+        }
+    };
     private final JLabel summaryLabel = new JLabel("共 0 张表");
 
-    /** 创建表清单，并为至少六行数据预留高度。 */
+    /** 创建表清单，并为至少四行数据预留高度。 */
     public TableListPanel() {
         setBorder(UiTheme.cardBorder("表清单"));
         setLayout(new BorderLayout(4, 4));
 
         table.setRowHeight(28);
+        table.setFillsViewportHeight(true);
         table.setAutoCreateRowSorter(true);
+        table.setDefaultRenderer(String.class, new TextRenderer(JLabel.LEFT));
+        table.setDefaultRenderer(Long.class, new TextRenderer(JLabel.RIGHT));
+        table.getColumnModel().getColumn(2).setCellRenderer(new TextRenderer(JLabel.RIGHT));
+        table.getColumnModel().getColumn(7).setCellRenderer(new TextRenderer(JLabel.CENTER));
         table.getColumnModel().getColumn(3).setCellRenderer(new StatusRenderer());
         table.getColumnModel().getColumn(4).setCellRenderer(new ProgressRenderer());
+        int[] widths = {50, 260, 105, 90, 110, 90, 90, 95, 290};
+        for (int column = 0; column < widths.length; column++) {
+            table.getColumnModel().getColumn(column).setPreferredWidth(widths[column]);
+        }
         table.getColumnModel().getColumn(0).setPreferredWidth(50);
         table.getColumnModel().getColumn(0).setMaxWidth(60);
-        table.getColumnModel().getColumn(1).setPreferredWidth(220);
-        table.getColumnModel().getColumn(8).setPreferredWidth(260);
 
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
         buttonPanel.setOpaque(false);
@@ -78,7 +100,7 @@ public class TableListPanel extends JPanel {
 
         add(new JScrollPane(table), BorderLayout.CENTER);
         add(bottomPanel, BorderLayout.SOUTH);
-        int minimumHeight = table.getRowHeight() * 6 + table.getTableHeader().getPreferredSize().height
+        int minimumHeight = table.getRowHeight() * 4 + table.getTableHeader().getPreferredSize().height
                 + bottomPanel.getPreferredSize().height + getInsets().top + getInsets().bottom + 8;
         setMinimumSize(new Dimension(200, minimumHeight));
     }
@@ -204,6 +226,26 @@ public class TableListPanel extends JPanel {
         }
     }
 
+    /** 文本保留左右间距，待导入的统计只显示占位符，不改变排序数据。 */
+    private static final class TextRenderer extends DefaultTableCellRenderer {
+        TextRenderer(int alignment) {
+            setHorizontalAlignment(alignment);
+        }
+
+        @Override
+        public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected,
+                                                      boolean hasFocus, int row, int column) {
+            super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
+            setBorder(BorderFactory.createEmptyBorder(2, 10, 2, 10));
+            int modelColumn = table.convertColumnIndexToModel(column);
+            if (modelColumn >= 4 && modelColumn <= 7
+                    && statusOf(table.getModel().getValueAt(table.convertRowIndexToModel(row), 3)) == TableStatus.PENDING) {
+                setText("—");
+            }
+            return this;
+        }
+    }
+
     /** 状态单元格：按状态着色的圆角标签 */
     private static final class StatusRenderer extends JLabel implements TableCellRenderer {
 
@@ -242,6 +284,8 @@ public class TableListPanel extends JPanel {
 
     /** 进度条单元格 */
     private static final class ProgressRenderer extends JProgressBar implements TableCellRenderer {
+        private final TextRenderer placeholder = new TextRenderer(JLabel.CENTER);
+
         ProgressRenderer() {
             setStringPainted(true);
             setBorderPainted(false);
@@ -253,7 +297,10 @@ public class TableListPanel extends JPanel {
                                                       boolean hasFocus, int row, int column) {
             int percent = value instanceof Integer ? (Integer) value : 0;
             setValue(percent);
-            TableStatus status = statusOf(table.getValueAt(row, 3));
+            TableStatus status = statusOf(table.getModel().getValueAt(table.convertRowIndexToModel(row), 3));
+            if (status == TableStatus.PENDING) {
+                return placeholder.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
+            }
             // 数据已读完但仍在进行中，说明在等待数据库提交，给出明确提示
             if (status == TableStatus.RUNNING && percent >= 100) {
                 setString("提交中...");

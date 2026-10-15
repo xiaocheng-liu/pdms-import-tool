@@ -19,51 +19,31 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
 
-/** 读取同目录的 Oracle _tables.sql，仅提取列类型，不执行原始脚本。 */
+/** 读取同目录的 Oracle _tables.sql，提取列类型和数据库注释，不执行原始脚本。 */
 public final class OracleTableDefinitions {
     private final Map<Path, Map<String, TableDefinition>> cache = new HashMap<>();
 
     /** 表定义与来源文件名一起缓存，多个脚本时仍能准确显示来源。 */
-    private record TableDefinition(String fileName, Map<String, String> columns) { }
+    private record TableDefinition(String fileName, Map<String, String> columns, Comments comments) { }
+
+    /** null 表示脚本没有声明表注释，空字符串表示明确清空注释。 */
+    public record Comments(String table, Map<String, String> columns) {
+        public Comments { columns = Map.copyOf(columns); }
+        public boolean isEmpty() { return table == null && columns.isEmpty(); }
+    }
+
+    /** 按与字段类型相同的 Schema 规则取得注释。 */
+    public Comments comments(CsvTable table, Charset charset, String schema, Consumer<String> logger) throws IOException {
+        TableDefinition definition = find(table, charset, schema, logger);
+        return definition == null ? new Comments(null, Map.of()) : definition.comments();
+    }
 
     /** 按列名覆盖采样类型；每次检查或导入中，同一个目录只解析一次。 */
     public void apply(CsvTable table, CsvMeta meta, Charset charset, Dialect dialect,
                       String schema, Consumer<String> logger) throws IOException {
-        Path directory = table.getFile().toPath().toAbsolutePath().getParent();
-        Map<String, TableDefinition> definitions = cache.get(directory);
-        if (definitions == null) {
-            definitions = new LinkedHashMap<>();
-            try (var files = Files.list(directory)) {
-                for (Path file : files.filter(path -> path.getFileName().toString().toLowerCase(Locale.ROOT)
-                        .endsWith("_tables.sql")).sorted().toList()) {
-                    try (InputStream input = CsvMetaReader.openWithoutBom(file.toFile())) {
-                        Map<String, Map<String, String>> parsed = parse(new String(input.readAllBytes(),
-                                charset == null ? StandardCharsets.UTF_8 : charset));
-                        for (var entry : parsed.entrySet()) {
-                            if (definitions.putIfAbsent(entry.getKey(),
-                                    new TableDefinition(file.getFileName().toString(), entry.getValue())) != null) {
-                                throw new IOException("多个 _tables.sql 文件重复定义表 " + entry.getKey());
-                            }
-                        }
-                    }
-                }
-            }
-            cache.put(directory, definitions);
-        }
-        if (definitions.isEmpty()) return;
+        TableDefinition definition = find(table, charset, schema, logger);
+        if (definition == null) return;
         String name = normalize(table.getTableName());
-        TableDefinition definition = definitions.get(normalize(schema == null ? "" : schema) + "." + name);
-        if (definition == null) {
-            List<TableDefinition> candidates = definitions.entrySet().stream()
-                    .filter(entry -> entry.getKey().equals(name) || entry.getKey().endsWith("." + name))
-                    .map(Map.Entry::getValue).toList();
-            if (candidates.size() == 1) definition = candidates.getFirst();
-            else {
-                logger.accept("[提示] " + name + "：_tables.sql " + (candidates.isEmpty()
-                        ? "未找到表定义" : "存在多个 schema 的同名表，无法唯一匹配") + "，继续使用 CSV 采样类型");
-                return;
-            }
-        }
         int matched = 0;
         for (ColumnProfile profile : meta.getProfiles()) {
             String declaration = definition.columns().get(normalize(profile.getName()));
@@ -99,6 +79,117 @@ public final class OracleTableDefinitions {
         }
         logger.accept("[建表] " + name + "：已从 " + definition.fileName() + " 匹配 " + matched + "/"
                 + meta.getProfiles().size() + " 列类型（" + dialect.type().getDisplayName() + "）");
+    }
+
+    /** 复用脚本缓存与 Schema 匹配，供已有字段扩长比较使用。 */
+    public Map<String, String> columns(CsvTable table, Charset charset, String schema,
+                                       Consumer<String> logger) throws IOException {
+        TableDefinition definition = find(table, charset, schema, logger);
+        return definition == null ? Map.of() : Map.copyOf(definition.columns());
+    }
+
+    /** 在同目录中寻找唯一匹配的源表定义。 */
+    private TableDefinition find(CsvTable table, Charset charset, String schema,
+                                 Consumer<String> logger) throws IOException {
+        Path directory = table.getFile().toPath().toAbsolutePath().getParent();
+        Map<String, TableDefinition> definitions = cache.get(directory);
+        if (definitions == null) {
+            definitions = new LinkedHashMap<>();
+            try (var files = Files.list(directory)) {
+                for (Path file : files.filter(path -> path.getFileName().toString().toLowerCase(Locale.ROOT)
+                        .endsWith("_tables.sql")).sorted().toList()) {
+                    try (InputStream input = CsvMetaReader.openWithoutBom(file.toFile())) {
+                        String sql = new String(input.readAllBytes(), charset == null ? StandardCharsets.UTF_8 : charset);
+                        Map<String, Map<String, String>> parsed = parse(sql);
+                        Map<String, Comments> comments = parseComments(sql);
+                        Set<String> names = new java.util.LinkedHashSet<>(parsed.keySet());
+                        names.addAll(comments.keySet());
+                        for (String name : names) {
+                            TableDefinition previous = definitions.get(name);
+                            Map<String, String> columns = parsed.getOrDefault(name, Map.of());
+                            Comments notes = comments.getOrDefault(name, new Comments(null, Map.of()));
+                            if (previous != null) {
+                                if (!columns.isEmpty() && !previous.columns().isEmpty()) {
+                                    throw new IOException("多个 _tables.sql 文件重复定义表 " + name);
+                                }
+                                if (columns.isEmpty()) columns = previous.columns();
+                                notes = mergeComments(name, previous.comments(), notes);
+                            }
+                            definitions.put(name, new TableDefinition(file.getFileName().toString(), columns, notes));
+                        }
+                    }
+                }
+            }
+            cache.put(directory, definitions);
+        }
+        if (definitions.isEmpty()) return null;
+        String name = normalize(table.getTableName());
+        TableDefinition definition = definitions.get(normalize(schema == null ? "" : schema) + "." + name);
+        if (definition == null) {
+            List<TableDefinition> candidates = definitions.entrySet().stream()
+                    .filter(entry -> entry.getKey().equals(name) || entry.getKey().endsWith("." + name))
+                    .map(Map.Entry::getValue).toList();
+            if (candidates.size() == 1) definition = candidates.getFirst();
+            else {
+                logger.accept("[提示] " + name + "：_tables.sql " + (candidates.isEmpty()
+                        ? "未找到表定义" : "存在多个 schema 的同名表，无法唯一匹配") + "，不使用该表脚本定义");
+                return null;
+            }
+        }
+        return definition;
+    }
+
+    /** 只解析 COMMENT ON 语句，不把普通 SQL 行注释当成数据库注释。 */
+    static Map<String, Comments> parseComments(String sql) throws IOException {
+        List<String> tokens = tokenize(sql);
+        Map<String, Comments> result = new LinkedHashMap<>();
+        for (int i = 0; i < tokens.size(); i++) {
+            if (!is(tokens, i, "COMMENT") || !is(tokens, i + 1, "ON")) continue;
+            boolean column = is(tokens, i + 2, "COLUMN");
+            if (!column && !is(tokens, i + 2, "TABLE")) continue;
+            int cursor = i + 3;
+            List<String> names = new ArrayList<>();
+            while (cursor < tokens.size()) {
+                String identifier = tokens.get(cursor++);
+                if (!(identifier.startsWith("\"") || identifier.matches("[\\p{L}_][\\p{L}\\p{N}_$#]*"))) {
+                    throw new IOException("COMMENT ON 对象名无效");
+                }
+                names.add(normalize(identifier));
+                if (!is(tokens, cursor, ".")) break;
+                cursor++;
+            }
+            if (names.size() < (column ? 2 : 1) || names.size() > (column ? 3 : 2)
+                    || !is(tokens, cursor++, "IS") || cursor >= tokens.size()) {
+                throw new IOException("COMMENT ON 语句不完整");
+            }
+            String literal = tokens.get(cursor++);
+            String text;
+            if (literal.equalsIgnoreCase("NULL")) text = "";
+            else if (literal.startsWith("'") && literal.endsWith("'")) {
+                text = literal.substring(1, literal.length() - 1).replace("''", "'");
+            } else if ((literal.startsWith("q'") || literal.startsWith("Q'")) && literal.length() >= 5) {
+                text = literal.substring(3, literal.length() - 2);
+            } else throw new IOException("COMMENT ON 仅支持字符串或 NULL");
+            if (cursor < tokens.size() && !is(tokens, cursor, ";")) throw new IOException("COMMENT ON 语句结尾无效");
+            String field = column ? names.removeLast() : null;
+            String name = String.join(".", names);
+            Comments comment = new Comments(column ? null : text, column ? Map.of(field, text) : Map.of());
+            result.put(name, mergeComments(name, result.getOrDefault(name, new Comments(null, Map.of())), comment));
+            i = cursor;
+        }
+        return result;
+    }
+
+    /** 拒绝重复注释声明，避免不同文件之间静默覆盖。 */
+    private static Comments mergeComments(String name, Comments first, Comments second) throws IOException {
+        if (first.table() != null && second.table() != null) throw new IOException("重复表注释：" + name);
+        Map<String, String> columns = new LinkedHashMap<>(first.columns());
+        for (var entry : second.columns().entrySet()) {
+            if (columns.putIfAbsent(entry.getKey(), entry.getValue()) != null) {
+                throw new IOException("重复字段注释：" + name + "." + entry.getKey());
+            }
+        }
+        return new Comments(second.table() == null ? first.table() : second.table(), columns);
     }
 
     /** 解析 CREATE TABLE，括号层级保证 NUMBER(p,s)、默认值和表约束不会打乱列。 */

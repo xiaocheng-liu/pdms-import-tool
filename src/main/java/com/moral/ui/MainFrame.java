@@ -4,6 +4,7 @@ import com.moral.model.ConnectionConfig;
 import com.moral.model.CsvTable;
 import com.moral.model.ImportOptions;
 import com.moral.model.ImportResult;
+import com.moral.model.SchemaPlan;
 import com.moral.model.TableProgress;
 import com.moral.model.TableStatus;
 import com.moral.task.FailureRecorder;
@@ -91,7 +92,7 @@ public class MainFrame extends JFrame {
 
         root.add(buildHeader(), BorderLayout.NORTH);
 
-        configPanel = buildConfigPanel();
+        configPanel = buildConfigPanel(connectionPanel, folderPanel, optionsPanel);
         // 配置区放入滚动容器：窗口再小也不会把卡片压扁（内容超长时出现滚动条）
         JScrollPane configScroll = new JScrollPane(configPanel,
                 JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
@@ -105,15 +106,19 @@ public class MainFrame extends JFrame {
         splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT, configScroll, tableListPanel);
         splitPane.setResizeWeight(0);
         splitPane.setContinuousLayout(true);
-        splitPane.setOneTouchExpandable(true);
+        splitPane.setOneTouchExpandable(false);
+        splitPane.setBorder(null);
+        splitPane.setDividerSize(7);
 
         // 日志默认紧凑显示，新增窗口空间分配给表清单
-        logPanel.setPreferredSize(new Dimension(1000, 120));
+        logPanel.setPreferredSize(new Dimension(1000, 104));
         logPanel.setMinimumSize(new Dimension(200, 80));
         mainSplitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT, splitPane, logPanel);
         mainSplitPane.setResizeWeight(1);
         mainSplitPane.setContinuousLayout(true);
-        mainSplitPane.setOneTouchExpandable(true);
+        mainSplitPane.setOneTouchExpandable(false);
+        mainSplitPane.setBorder(null);
+        mainSplitPane.setDividerSize(7);
 
         root.add(mainSplitPane, BorderLayout.CENTER);
         root.add(buildActionBar(), BorderLayout.SOUTH);
@@ -140,7 +145,7 @@ public class MainFrame extends JFrame {
      * 配置区采用左右两栏布局：左侧数据库连接，右侧数据源文件夹 + 导入选项。
      * 相比纵向堆叠可显著降低整体高度，避免小窗口下卡片被压扁。
      */
-    private JPanel buildConfigPanel() {
+    static JPanel buildConfigPanel(ConnectionPanel connectionPanel, FolderPanel folderPanel, OptionsPanel optionsPanel) {
         JPanel rightPanel = new JPanel();
         rightPanel.setOpaque(false);
         rightPanel.setLayout(new BoxLayout(rightPanel, BoxLayout.Y_AXIS));
@@ -153,7 +158,7 @@ public class MainFrame extends JFrame {
         rightPanel.add(optionsPanel);
 
         Dimension connectionPreferred = connectionPanel.getPreferredSize();
-        connectionPanel.setPreferredSize(new Dimension(Math.max(400, connectionPreferred.width),
+        connectionPanel.setPreferredSize(new Dimension(Math.max(380, connectionPreferred.width),
                 connectionPreferred.height));
 
         // 使用支持"宽度跟随视口"的面板，避免宽度溢出导致右侧按钮被裁掉
@@ -224,7 +229,7 @@ public class MainFrame extends JFrame {
         textPanel.add(javax.swing.Box.createHorizontalStrut(16));
         textPanel.add(subtitle);
 
-        header.add(textPanel, BorderLayout.WEST);
+        header.add(textPanel, BorderLayout.CENTER);
         return header;
     }
 
@@ -348,52 +353,65 @@ public class MainFrame extends JFrame {
         prepareAndRun(config, selected);
     }
 
-    /** 自动建表时先生成 DDL 供预览确认，再执行导入 */
+    /** 先检查建表、新增字段与扩长，统一预览确认后开始导入。 */
     private void prepareAndRun(ConnectionConfig config, List<CsvTable> selected) {
         startButton.setEnabled(false);
-        if (!options.isAutoCreateTable()) {
-            runImport(config, selected, new LinkedHashMap<String, String>());
+        optionsPanel.setEditable(false);
+        connectionPanel.getSaveButton().setEnabled(false);
+        folderPanel.getScanButton().setEnabled(false);
+        if (!options.isAutoCreateTable() && !options.isSyncColumnLengths() && !options.isAddMissingColumns() && !options.isSyncComments()) {
+            runImport(config, selected, new SchemaPlan());
             return;
         }
-        logPanel.append("正在检查目标库中缺失的表...", LogPanel.Level.INFO);
-        new SwingWorker<Map<String, String>, Void>() {
+        logPanel.append("正在检查目标表结构和字段长度...", LogPanel.Level.INFO);
+        new SwingWorker<SchemaPlan, Void>() {
             @Override
-            protected Map<String, String> doInBackground() throws Exception {
-                return engine.generateMissingDdl(selected, config, options,
+            protected SchemaPlan doInBackground() throws Exception {
+                return engine.prepareSchema(selected, config, options,
                         message -> logPanel.append(message, messagingLevel(message)));
             }
 
             @Override
             protected void done() {
-                Map<String, String> ddlMap;
+                SchemaPlan plan;
                 try {
-                    ddlMap = get();
+                    plan = get();
                 } catch (Exception e) {
                     Throwable cause = e.getCause() == null ? e : e.getCause();
                     logPanel.append("检查表结构失败：" + cause.getMessage(), LogPanel.Level.ERROR);
                     SwingUtil.showError(MainFrame.this, "检查表结构失败：" + cause.getMessage());
-                    startButton.setEnabled(true);
+                    restorePreparationControls();
                     return;
                 }
-                if (ddlMap.isEmpty()) {
-                    logPanel.append("目标库表结构完整，无需建表", LogPanel.Level.SUCCESS);
-                    runImport(config, selected, ddlMap);
-                    return;
+                if (plan.failedCount() > 0) {
+                    logPanel.append("结构检查失败 " + plan.failedCount() + " 张表，这些表将跳过清表和导入", LogPanel.Level.WARN);
                 }
-                logPanel.append("发现 " + ddlMap.size() + " 张表在目标库中不存在，已生成建表语句", LogPanel.Level.WARN);
-                DdlPreviewDialog dialog = new DdlPreviewDialog(MainFrame.this, ddlMap);
-                dialog.setVisible(true);
-                if (!dialog.isConfirmed()) {
-                    logPanel.append("已取消导入", LogPanel.Level.WARN);
-                    startButton.setEnabled(true);
-                    return;
+                if (plan.hasChanges()) {
+                    DdlPreviewDialog dialog = new DdlPreviewDialog(MainFrame.this, plan);
+                    dialog.setVisible(true);
+                    if (!dialog.isConfirmed()) {
+                        logPanel.append("已取消导入", LogPanel.Level.WARN);
+                        restorePreparationControls();
+                        return;
+                    }
+                } else {
+                    logPanel.append("本次没有可执行结构变更" + (plan.failedCount() > 0 ? "，存在检查失败表" : ""),
+                            plan.failedCount() > 0 ? LogPanel.Level.WARN : LogPanel.Level.INFO);
                 }
-                runImport(config, selected, dialog.getDdlMap());
+                runImport(config, selected, plan);
             }
         }.execute();
     }
 
-    private void runImport(ConnectionConfig config, List<CsvTable> selected, Map<String, String> ddlMap) {
+    /** 准备取消、失败或导入结束后恢复参数入口。 */
+    private void restorePreparationControls() {
+        startButton.setEnabled(true);
+        optionsPanel.setEditable(true);
+        connectionPanel.getSaveButton().setEnabled(true);
+        folderPanel.getScanButton().setEnabled(true);
+    }
+
+    private void runImport(ConnectionConfig config, List<CsvTable> selected, SchemaPlan plan) {
         running = true;
         lastResult = null;
         importStartedAt = System.currentTimeMillis();
@@ -416,7 +434,7 @@ public class MainFrame extends JFrame {
             @Override
             protected Void doInBackground() {
                 try {
-                    lastResult = engine.start(selected, config, options, ddlMap, listener);
+                    lastResult = engine.startPrepared(selected, config, options, plan, listener);
                 } catch (Exception e) {
                     Throwable cause = e.getCause() == null ? e : e.getCause();
                     logPanel.append("导入失败：" + cause.getMessage(), LogPanel.Level.ERROR);
@@ -447,7 +465,7 @@ public class MainFrame extends JFrame {
         startButton.setText("开始导入");
         startButton.setEnabled(true);
         stopButton.setEnabled(false);
-        optionsPanel.setEditable(true);
+        restorePreparationControls();
         updateTotalProgress();
         if (lastResult == null) {
             return;

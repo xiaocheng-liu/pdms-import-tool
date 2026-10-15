@@ -20,13 +20,13 @@ import java.io.File;
 public class FolderPanel extends JPanel {
 
     private final JTextField dirField = new JTextField();
-    private final JButton chooseButton = new JButton("选择文件夹");
+    private final JButton chooseButton = new JButton("选择目录");
     private final JButton scanButton = new JButton("扫描 CSV");
     private final JLabel statsLabel = new JLabel("尚未扫描");
 
     public FolderPanel() {
-        setBorder(UiTheme.cardBorder("数据源文件夹"));
-        setLayout(new BorderLayout(8, 4));
+        setBorder(UiTheme.cardBorder("CSV 目录"));
+        setLayout(new BorderLayout(6, 2));
 
         dirField.setColumns(12);
         dirField.setText(PlatformUtil.defaultCsvDir());
@@ -44,10 +44,11 @@ public class FolderPanel extends JPanel {
         buttonPanel.add(chooseButton);
         buttonPanel.add(scanButton);
         int buttonHeight = Math.max(28, chooseButton.getPreferredSize().height);
-        buttonPanel.setPreferredSize(new Dimension(200, buttonHeight));
+        buttonPanel.setPreferredSize(new Dimension(180, buttonHeight));
         topPanel.add(buttonPanel, BorderLayout.EAST);
 
-        statsLabel.setText("提示：文件名即表名，先选择文件夹再点「扫描 CSV」");
+        statsLabel.setText("文件名对应表名，选择目录后扫描。");
+        statsLabel.setToolTipText("选择存放 CSV 的目录后点击「扫描 CSV」；CSV 文件名对应目标表名");
         UiTheme.muted(statsLabel);
 
         add(topPanel, BorderLayout.NORTH);
@@ -85,8 +86,8 @@ public class FolderPanel extends JPanel {
     }
 
     public void setStats(int fileCount, long totalBytes, int selectedCount) {
-        statsLabel.setText("共 " + fileCount + " 个 CSV，总大小 " + FileSizeUtil.formatSize(totalBytes)
-                + "，已勾选 " + selectedCount + " 个");
+        statsLabel.setText(fileCount + " 个 CSV · " + FileSizeUtil.formatSize(totalBytes)
+                + " · 已选 " + selectedCount + " 个");
     }
 
     public void setStats(String text) {

@@ -11,7 +11,7 @@ public class ColumnProfile {
     private int observedMaxCharacters;
     private String declaredSqlType;
 
-    /** 从 Oracle 建表定义转换得到的目标类型，空值表示继续使用采样。 */
+    /** Oracle 脚本转换的建表类型或目标列元数据类型，空值表示仅有采样结果。 */
     public String getDeclaredSqlType() {
         return declaredSqlType;
     }

@@ -58,12 +58,14 @@ public final class MySqlLoadDataLoader {
 
     /**
      * 带三件事的包装流：① 取消时立刻中断读取，让驱动中止 LOAD DATA；
-     * ② 累计已读字节数驱动进度；③ 把 CRLF 归一成 LF，避免行尾 \r 落到最后一个字段里。
+     * ② 累计已读字节数驱动进度；③ 仅把引号外的 CRLF 归一成 LF，保留字段内部换行。
      */
     private static final class MonitoredStream extends FilterInputStream {
 
         private final LongConsumer bytesConsumer;
         private final BooleanSupplier cancelled;
+        /** CSV 引号状态；连续两个双引号转义后状态保持不变。 */
+        private boolean inQuotes;
         /** 已读取但尚未输出的字节（-1 表示无暂存） */
         private int pending = -1;
         private long total;
@@ -86,13 +88,16 @@ public final class MySqlLoadDataLoader {
                 pending = -1;
             } else {
                 value = super.read();
-                if (value == '\r') {
-                    int next = super.read();
-                    if (next == '\n') {
-                        value = '\n';
-                    } else {
-                        pending = next;
-                    }
+            }
+            // 暂存字节同样参与引号和换行判断，避免预读后漏掉状态变化。
+            if (value == '"') {
+                inQuotes = !inQuotes;
+            } else if (value == '\r' && !inQuotes) {
+                int next = super.read();
+                if (next == '\n') {
+                    value = '\n';
+                } else {
+                    pending = next;
                 }
             }
             if (value >= 0) {
