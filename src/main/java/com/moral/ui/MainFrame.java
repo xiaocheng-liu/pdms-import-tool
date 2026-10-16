@@ -71,6 +71,7 @@ public class MainFrame extends JFrame {
     private long lastProgressBytes;
     private double smoothRateBytesPerMs = -1;
     private boolean running;
+    private boolean closeAfterImport;
 
     public MainFrame() {
         super("PDMS 数据导入工具");
@@ -275,12 +276,18 @@ public class MainFrame extends JFrame {
         addWindowListener(new java.awt.event.WindowAdapter() {
             @Override
             public void windowClosing(java.awt.event.WindowEvent event) {
-                if (running && !SwingUtil.confirm(MainFrame.this, "导入正在进行，确认退出吗？")) {
+                String message = running ? "导入正在进行，确认退出吗？" : "确认退出 PDMS 数据导入工具吗？";
+                if (!SwingUtil.confirm(MainFrame.this, message)) {
                     return;
                 }
-                saveConfig();
-                dispose();
-                System.exit(0);
+                if (!running) {
+                    saveConfig();
+                    dispose();
+                    System.exit(0);
+                    return;
+                }
+                closeAfterImport = true;
+                stopImport();
             }
         });
     }
@@ -462,6 +469,12 @@ public class MainFrame extends JFrame {
 
     private void finishImport() {
         running = false;
+        if (closeAfterImport) {
+            saveConfig();
+            dispose();
+            System.exit(0);
+            return;
+        }
         startButton.setText("开始导入");
         startButton.setEnabled(true);
         stopButton.setEnabled(false);
