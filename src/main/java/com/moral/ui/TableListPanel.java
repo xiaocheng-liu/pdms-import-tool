@@ -51,6 +51,9 @@ public class TableListPanel extends JPanel {
         }
     };
     private final JLabel summaryLabel = new JLabel("共 0 张表");
+    private final JButton selectAllButton = new JButton("全选");
+    private final JButton selectNoneButton = new JButton("全不选");
+    private final JButton invertButton = new JButton("反选");
 
     /** 创建表清单，并为至少四行数据预留高度。 */
     public TableListPanel() {
@@ -75,9 +78,7 @@ public class TableListPanel extends JPanel {
 
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
         buttonPanel.setOpaque(false);
-        JButton selectAllButton = new JButton("全选");
-        JButton selectNoneButton = new JButton("全不选");
-        JButton invertButton = new JButton("反选");
+        updateSelectionButtons();
         buttonPanel.add(selectAllButton);
         buttonPanel.add(selectNoneButton);
         buttonPanel.add(invertButton);
@@ -108,7 +109,16 @@ public class TableListPanel extends JPanel {
     public void setTables(List<CsvTable> newTables) {
         tables.clear();
         tables.addAll(newTables);
+        updateSelectionButtons();
         refresh();
+    }
+
+    /** 表清单为空时禁用批量选择操作。 */
+    private void updateSelectionButtons() {
+        boolean hasTables = !tables.isEmpty();
+        selectAllButton.setEnabled(hasTables);
+        selectNoneButton.setEnabled(hasTables);
+        invertButton.setEnabled(hasTables);
     }
 
     public List<CsvTable> getTables() {

@@ -1,12 +1,10 @@
 package com.moral.ui;
 
-import com.moral.util.FileSizeUtil;
 import com.moral.util.PlatformUtil;
 import com.moral.util.UiTheme;
 
 import javax.swing.JButton;
 import javax.swing.JFileChooser;
-import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JTextField;
 import java.awt.BorderLayout;
@@ -22,8 +20,8 @@ public class FolderPanel extends JPanel {
     private final JTextField dirField = new JTextField();
     private final JButton chooseButton = new JButton("选择目录");
     private final JButton scanButton = new JButton("扫描 CSV");
-    private final JLabel statsLabel = new JLabel("尚未扫描");
 
+    /** 创建目录输入框和选择、扫描按钮。 */
     public FolderPanel() {
         setBorder(UiTheme.cardBorder("CSV 目录"));
         setLayout(new BorderLayout(6, 2));
@@ -47,12 +45,7 @@ public class FolderPanel extends JPanel {
         buttonPanel.setPreferredSize(new Dimension(180, buttonHeight));
         topPanel.add(buttonPanel, BorderLayout.EAST);
 
-        statsLabel.setText("文件名对应表名，选择目录后扫描。");
-        statsLabel.setToolTipText("选择存放 CSV 的目录后点击「扫描 CSV」；CSV 文件名对应目标表名");
-        UiTheme.muted(statsLabel);
-
         add(topPanel, BorderLayout.NORTH);
-        add(statsLabel, BorderLayout.SOUTH);
 
         chooseButton.addActionListener(event -> chooseDirectory());
     }
@@ -85,12 +78,4 @@ public class FolderPanel extends JPanel {
         return scanButton;
     }
 
-    public void setStats(int fileCount, long totalBytes, int selectedCount) {
-        statsLabel.setText(fileCount + " 个 CSV · " + FileSizeUtil.formatSize(totalBytes)
-                + " · 已选 " + selectedCount + " 个");
-    }
-
-    public void setStats(String text) {
-        statsLabel.setText(text);
-    }
 }

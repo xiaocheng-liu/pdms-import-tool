@@ -152,8 +152,8 @@ public class MainFrame extends JFrame {
         rightPanel.setLayout(new BoxLayout(rightPanel, BoxLayout.Y_AXIS));
         folderPanel.setAlignmentX(LEFT_ALIGNMENT);
         optionsPanel.setAlignmentX(LEFT_ALIGNMENT);
+        // 目录保持紧凑，导入选项填满剩余高度，与左侧连接卡片底部对齐。
         lockHeight(folderPanel);
-        lockHeight(optionsPanel);
         rightPanel.add(folderPanel);
         rightPanel.add(javax.swing.Box.createVerticalStrut(4));
         rightPanel.add(optionsPanel);
@@ -218,8 +218,8 @@ public class MainFrame extends JFrame {
         title.setFont(title.getFont().deriveFont(Font.BOLD, 20f));
         title.setForeground(UiTheme.TEXT_PRIMARY);
         JLabel subtitle = new JLabel("Oracle / PostgreSQL / 达梦 / 人大金仓 / MySQL · CSV 文件夹批量并发导入");
-        subtitle.setFont(subtitle.getFont().deriveFont(Font.PLAIN, 12f));
-        UiTheme.muted(subtitle);
+        subtitle.setFont(subtitle.getFont().deriveFont(Font.PLAIN, 11f));
+        subtitle.setForeground(UiTheme.TEXT_DISABLED);
 
         JPanel textPanel = new JPanel();
         textPanel.setLayout(new BoxLayout(textPanel, BoxLayout.X_AXIS));
@@ -259,6 +259,7 @@ public class MainFrame extends JFrame {
         actionBar.add(controls, BorderLayout.CENTER);
         actionBar.add(totalLabel, BorderLayout.SOUTH);
 
+        startButton.setEnabled(false);
         stopButton.setEnabled(false);
         exportButton.setEnabled(false);
         return actionBar;
@@ -335,7 +336,7 @@ public class MainFrame extends JFrame {
             total += file.length();
         }
         tableListPanel.setTables(tables);
-        folderPanel.setStats(tables.size(), total, tables.size());
+        startButton.setEnabled(!tables.isEmpty());
         logPanel.append("扫描到 " + tables.size() + " 个 CSV，合计 " + FileSizeUtil.formatSize(total), LogPanel.Level.SUCCESS);
     }
 
@@ -412,7 +413,7 @@ public class MainFrame extends JFrame {
 
     /** 准备取消、失败或导入结束后恢复参数入口。 */
     private void restorePreparationControls() {
-        startButton.setEnabled(true);
+        startButton.setEnabled(!tableListPanel.getTables().isEmpty());
         optionsPanel.setEditable(true);
         connectionPanel.getSaveButton().setEnabled(true);
         folderPanel.getScanButton().setEnabled(true);
@@ -476,7 +477,6 @@ public class MainFrame extends JFrame {
             return;
         }
         startButton.setText("开始导入");
-        startButton.setEnabled(true);
         stopButton.setEnabled(false);
         restorePreparationControls();
         updateTotalProgress();
