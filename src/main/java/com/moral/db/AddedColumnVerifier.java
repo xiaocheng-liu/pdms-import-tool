@@ -33,6 +33,25 @@ public final class AddedColumnVerifier {
                 throw new SQLException("新增字段长度或单位验证失败：" + change.column());
             }
         }
+        if (dialect.type() == DbType.KINGBASE) {
+            // 金仓 V8 的可空性与精度也从目录读取，避免 V9 JDBC 元数据访问 PG_CATALOG。
+            try (var statement = connection.prepareStatement("SELECT is_nullable, numeric_precision, numeric_scale "
+                    + "FROM information_schema.columns WHERE table_schema=? AND table_name=? AND column_name=?")) {
+                statement.setString(1, change.schema()); statement.setString(2, change.table());
+                statement.setString(3, change.column());
+                try (var rows = statement.executeQuery()) {
+                    if (!rows.next() || !"YES".equalsIgnoreCase(rows.getString(1))) {
+                        throw new SQLException("新增字段可空性验证失败：" + change.column());
+                    }
+                    Matcher number = Pattern.compile("(?:NUMBER|NUMERIC|DECIMAL)\\((\\d+),(-?\\d+)\\)").matcher(declaration);
+                    if (number.matches() && (rows.getInt(2) != Integer.parseInt(number.group(1))
+                            || rows.getInt(3) != Integer.parseInt(number.group(2)))) {
+                        throw new SQLException("新增字段数值精度验证失败：" + change.column());
+                    }
+                }
+            }
+            return;
+        }
         String sql = "SELECT " + CharacterColumns.identifier(dialect, change.column()) + " FROM "
                 + CharacterColumns.qualified(dialect, change.schema(), change.table()) + " WHERE 1=0";
         try (Statement statement = connection.createStatement(); ResultSet rows = statement.executeQuery(sql)) {

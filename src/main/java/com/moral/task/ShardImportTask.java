@@ -563,13 +563,15 @@ public class ShardImportTask implements Callable<Boolean> {
                     rows++;
                     continue;
                 }
+                if ((rows + 1) % REPORT_INTERVAL == 0) {
+                    long read = reader.bytesRead();
+                    reportBytes(read - reportedBytes);
+                    reportedBytes = read;
+                }
                 writer.write(CsvMetaReader.valuesOf(record, columnCount), record.getRecordNumber());
                 rows++;
                 if (rows % REPORT_INTERVAL == 0) {
-                    long read = reader.bytesRead();
-                    reportBytes(read - reportedBytes);
                     progress.addRows(rows - reportedRows);
-                    reportedBytes = read;
                     reportedRows = rows;
                     syncCounters(writer);
                     lastActivityAt = System.currentTimeMillis();

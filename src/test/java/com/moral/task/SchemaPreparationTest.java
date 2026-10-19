@@ -47,6 +47,31 @@ public class SchemaPreparationTest {
         }
     }
 
+    /** 源与目标同为 NCLOB 时不提示类型差异。 */
+    @Test public void skipsSameLargeTextType() throws Exception {
+        Fixture db = new Fixture();
+        db.type = "NCLOB";
+        db.lengths.put("CODE", -1);
+        SchemaPlan.Table plan = new SchemaPlan.Table("DEMO");
+        List<String> notes = new ArrayList<>();
+        SchemaPreparation.compare(db.dialect, db.metadata(), List.of("CODE"),
+                Map.of("CODE", "NCLOB"), plan, notes::add);
+        assertTrue(plan.widenings().isEmpty());
+        assertTrue(notes.isEmpty());
+    }
+
+    /** 源数值声明带精度时，目录基础类型 NUMBER 不应提示类型差异。 */
+    @Test public void skipsSameNumericTypeFamily() throws Exception {
+        Fixture db = new Fixture();
+        db.type = "NUMBER";
+        SchemaPlan.Table plan = new SchemaPlan.Table("DEMO");
+        List<String> notes = new ArrayList<>();
+        SchemaPreparation.compare(db.dialect, db.metadata(), List.of("CODE"),
+                Map.of("CODE", "NUMBER(10,0)"), plan, notes::add);
+        assertTrue(plan.widenings().isEmpty());
+        assertTrue(notes.isEmpty());
+    }
+
     /** 脚本未指定单位时沿用数据库的 BYTE；缺少源列不扩长。 */
     @Test public void preservesUnspecifiedUnitAndSkipsMissingSourceColumn() throws Exception {
         Fixture db = new Fixture();

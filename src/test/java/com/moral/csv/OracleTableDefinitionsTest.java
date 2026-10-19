@@ -19,6 +19,12 @@ public class OracleTableDefinitionsTest {
     @Rule public TemporaryFolder folder = new TemporaryFolder();
 
     /** 注释、默认值和约束中的逗号不得改变字段划分。 */
+    @Test public void kingbasePreservesCharacterUnits() {
+        assertEquals("VARCHAR(200 CHAR)", OracleColumnType.map("VARCHAR2(200)", DbType.KINGBASE).sql());
+        assertEquals("VARCHAR(200 CHAR)", OracleColumnType.map("VARCHAR2(200 CHAR)", DbType.KINGBASE).sql());
+        assertEquals("VARCHAR(200 BYTE)", OracleColumnType.map("VARCHAR2(200 BYTE)", DbType.KINGBASE).sql());
+    }
+
     @Test public void parsesExportSyntax() throws Exception {
         var tables = OracleTableDefinitions.parse("""
                 -- CREATE TABLE fake(x NUMBER);

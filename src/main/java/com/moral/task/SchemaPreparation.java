@@ -107,6 +107,7 @@ public final class SchemaPreparation {
             }
             OracleColumnType mapped = OracleColumnType.map(declaration, dialect.type());
             String desired = mapped == null ? declaration : mapped.sql();
+            if (mapped != null && sameTypeFamily(desired, current.type())) continue;
             Matcher chars = Pattern.compile("(?i)^(VARCHAR2|VARCHAR|NVARCHAR2|NVARCHAR|CHAR|NCHAR)\\((\\d+)(?: (BYTE|CHAR))?\\)$")
                     .matcher(desired);
             if (!chars.matches() || !current.isCharacter()
@@ -118,6 +119,12 @@ public final class SchemaPreparation {
             Matcher explicitUnit = Pattern.compile("(?i)\\b(BYTE|CHAR)\\s*\\)\\s*$").matcher(declaration);
             if (explicitUnit.find() && !current.unit().equals(explicitUnit.group(1).toUpperCase(Locale.ROOT))) {
                 note.accept("[提示] " + result.name() + "." + name + "：源与目标长度单位不同，不自动修改");
+                continue;
+            }
+            if (dialect.type() == com.moral.model.DbType.KINGBASE && chars.group(3) != null
+                    && !current.unit().equalsIgnoreCase(chars.group(3))) {
+                note.accept("[提示] " + result.name() + "." + name + "：目标 " + current.display()
+                        + " 与源转换类型 " + desired + " 长度单位不同，不自动转换；请确认后调整目标列单位");
                 continue;
             }
             int length = Integer.parseInt(chars.group(2));
@@ -133,6 +140,17 @@ public final class SchemaPreparation {
             }
             result.widenings().add(new SchemaPlan.Widening(target.schema(), target.name(), current, length, sql));
         }
+    }
+
+    /** 目录通常只返回基础类型，带精度的数值声明仍属于同一类型族。 */
+    private static boolean sameTypeFamily(String desired, String actual) {
+        String source = CharacterColumns.normalizeType(desired);
+        String target = CharacterColumns.normalizeType(actual);
+        if (source.equals(target)) return true;
+        if (source.matches("^(NUMBER|NUMERIC|DECIMAL)(?:\\(.*\\))?$")
+                && target.matches("^(NUMBER|NUMERIC|DECIMAL)$")) return true;
+        return source.matches("^(DATE|DATETIME|TIMESTAMP)(?:\\(.*\\))?$")
+                && target.matches("^(DATE|DATETIME|TIMESTAMP)$");
     }
 
     /** 严格执行单条语句，提交异常不得当成隐式提交忽略。 */

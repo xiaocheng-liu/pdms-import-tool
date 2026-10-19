@@ -41,6 +41,16 @@ public class SchemaCommentsTest {
         }
     }
 
+    /** 数据库注释存在换行或首尾空白时，内容相同不重复生成 COMMENT。 */
+    @Test public void skipsEquivalentCommentWhitespace() throws Exception {
+        Fixture db = new Fixture(DbType.ORACLE);
+        db.comment = "进口药品注册证号\r\n";
+        SchemaPlan.Table plan = new SchemaPlan.Table("DEMO");
+        SchemaComments.prepare(db.connection, db.dialect, "KBE", "DEMO", meta(csv()), true,
+                new OracleTableDefinitions.Comments(null, Map.of("CODE", "进口药品注册证号")), plan);
+        assertTrue(plan.comments().isEmpty());
+    }
+
     /** MySQL 扩长与注释混合时，注释 SQL 必须使用扩长后的完整定义。 */
     @Test public void mysqlWidenAndCommentKeepAttributes() throws Exception {
         Fixture db = new Fixture(DbType.MYSQL);

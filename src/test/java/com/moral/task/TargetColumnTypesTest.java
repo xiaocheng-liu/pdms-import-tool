@@ -65,10 +65,15 @@ public class TargetColumnTypesTest {
             var dialect = DialectFactory.get(type);
             CsvMeta meta = meta("NOTE", "CREATED_AT", "CODE");
             List<String> queries = new ArrayList<>();
-            TargetColumnTypes.apply(connection(queries, Types.CLOB, Types.DATE, Types.NVARCHAR),
+            TargetColumnTypes.apply(type == DbType.KINGBASE ? kingbaseConnection(queries) : connection(queries, Types.CLOB, Types.DATE, Types.NVARCHAR),
                     dialect, "KBE", "DEMO", meta, false);
             assertEquals(List.of(InferredType.TEXT, InferredType.DATETIME, InferredType.STRING),
                     meta.getProfiles().stream().map(ColumnProfile::getType).toList());
+            if (type == DbType.KINGBASE) {
+                assertTrue(queries.getFirst().contains("sys_catalog.sys_attribute"));
+                assertFalse(queries.getFirst().contains("pg_catalog"));
+                continue;
+            }
             assertEquals("SELECT " + String.join(", ", meta.getColumns().stream()
                     .map(dialect::normalizeTableName).map(dialect::quote).toList())
                     + " FROM " + dialect.fullyQualified("KBE", "DEMO") + " WHERE 1=0", queries.getFirst());
@@ -131,6 +136,29 @@ public class TargetColumnTypesTest {
     private static BatchingWriter writer(BatchingWriterTest.JdbcFixture db, CsvMeta meta) {
         return new BatchingWriter(db.connection, db.statement, meta.getProfiles(), 1000,
                 true, true, db.recorder, "DEMO", 0);
+    }
+
+    /** 列目录顺序故意不同于 CSV，验证金仓按列名绑定且不调用驱动类型元数据。 */
+    private static Connection kingbaseConnection(List<String> queries) {
+        Object[][] values = {{"code", "VARCHAR", 50L, null, "CHAR"},
+                {"note", "TEXT", null, null, "CHAR"}, {"created_at", "TIMESTAMP", null, null, "CHAR"}};
+        return proxy(Connection.class, (method, args) -> {
+            if (!method.equals("prepareStatement")) throw new AssertionError("不应访问 JDBC 类型元数据：" + method);
+            queries.add((String) args[0]);
+            return proxy(java.sql.PreparedStatement.class, (name, params) -> {
+                if (!name.equals("executeQuery")) return null;
+                int[] index = {-1}; boolean[] wasNull = {false};
+                return proxy(ResultSet.class, (op, a) -> {
+                    if (op.equals("next")) return ++index[0] < values.length;
+                    if (op.equals("wasNull")) return wasNull[0];
+                    if (op.equals("getString") || op.equals("getLong")) {
+                        Object value = values[index[0]][(int)a[0]-1]; wasNull[0] = value == null;
+                        return op.equals("getString") ? value : value == null ? 0L : value;
+                    }
+                    return null;
+                });
+            });
+        });
     }
 
     /** 只返回列元数据，不提供任何数据行。 */

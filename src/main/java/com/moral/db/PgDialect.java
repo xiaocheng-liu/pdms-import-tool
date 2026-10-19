@@ -157,19 +157,18 @@ public class PgDialect implements Dialect {
      *       "关系 pg_class 不存在"，异常被吞掉后整段检查形同虚设。</li>
      * </ol>
      *
-     * <p>因此这里按"不依赖系统表的手段优先"依次降级，任一手段失败都先回滚再交给下一个手段，
-     * 避免派生错误 {@code 当前事务被终止} 掩盖真实原因：直接解析关系 → to_regclass →
-     * 带 {@code pg_catalog} 前缀的目录查询 → JDBC 元数据。
+     * <p>目录查询和 JDBC 元数据优先，用于排除视图等非表对象；任一手段失败都先回滚再交给下一个手段，
+     * 避免派生错误 {@code 当前事务被终止} 掩盖真实原因。最后才用直接解析关系兜底，以兼容目录不可访问的实例。
      */
     @Override
     public boolean tableExists(Connection conn, String schema, String table) throws SQLException {
         String tableName = normalizeTableName(table);
         String target = schema == null ? "" : schema.trim().toLowerCase(Locale.ROOT);
         List<TableProbe> probes = Arrays.asList(
-                this::probeByRelationName,
-                this::probeByRegClass,
                 this::probeByCatalog,
-                this::probeByMetaData);
+                this::probeByMetaData,
+                this::probeByRelationName,
+                this::probeByRegClass);
         List<String> failures = new ArrayList<>();
         for (TableProbe probe : probes) {
             try {
@@ -192,10 +191,7 @@ public class PgDialect implements Dialect {
         Boolean probe(Connection conn, String schema, String table) throws SQLException;
     }
 
-    /**
-     * 首选手段：把写入时使用的限定名直接拿去解析。
-     * 不依赖任何系统表，且与写库口径完全一致，因此"能查到 = 能写入"。
-     */
+    /** 兜底手段：把写入时使用的限定名直接拿去解析。 */
     private Boolean probeByRelationName(Connection conn, String schema, String table) throws SQLException {
         String sql = "SELECT 1 FROM " + fullyQualified(schema, table) + " WHERE 1=0";
         try (Statement statement = conn.createStatement(); ResultSet rows = statement.executeQuery(sql)) {

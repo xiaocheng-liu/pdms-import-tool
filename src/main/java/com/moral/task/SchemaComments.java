@@ -47,7 +47,7 @@ public final class SchemaComments {
                 throw new SQLException("无法同步注释，目标缺少字段：" + name + "." + column);
             }
             String before = current.getOrDefault(column, "");
-            if (before.equals(after)) continue;
+            if (sameComment(before, after)) continue;
             String literal = DatabaseComments.literal(dialect, after, noBackslash);
             CharacterColumns.Column baseline = null;
             String sql;
@@ -83,6 +83,15 @@ public final class SchemaComments {
         }
     }
 
+    /** 忽略数据库返回的换行差异和首尾空白，避免相同注释重复生成 COMMENT。 */
+    private static boolean sameComment(String before, String after) {
+        return normalizeComment(before).equals(normalizeComment(after));
+    }
+
+    private static String normalizeComment(String value) {
+        return value == null ? "" : value.replace("\r\n", "\n").replace('\r', '\n').trim();
+    }
+
     /** 新表尚无目录记录，使用与建表一致的显式 Schema 或会话默认 Schema。 */
     private static String newTableSchema(Connection connection, Dialect dialect, String schema) throws SQLException {
         String owner = dialect.type() == DbType.MYSQL ? connection.getCatalog() : schema;
@@ -91,7 +100,8 @@ public final class SchemaComments {
             owner = connection.getMetaData().getUserName();
         }
         if (owner == null || owner.isBlank()) throw new SQLException("无法确定注释目标 Schema，请显式指定");
-        return dialect.type() == DbType.MYSQL ? owner : dialect.normalizeTableName(owner);
+        return dialect.type() == DbType.MYSQL || dialect.type() == DbType.KINGBASE
+                ? owner : dialect.normalizeTableName(owner);
     }
 
     /** 防止预览与执行连接采用不同的 MySQL 字符串转义规则。 */

@@ -35,7 +35,7 @@ public final class CharacterColumns {
 
         /** 供预览和日志显示的实际类型。 */
         public String display() {
-            return type + (length > 0 ? "(" + length + (unit.isEmpty() ? "" : " " + unit) + ")" : "");
+            return type + (isCharacter() ? "(" + length + (unit.isEmpty() ? "" : " " + unit) + ")" : "");
         }
 
         /** 只有可准确识别长度和单位的普通字符列允许扩长。 */
@@ -60,6 +60,14 @@ public final class CharacterColumns {
                 : "SELECT column_name, data_type, character_maximum_length"
                     + (dialect.type() == DbType.MYSQL ? ", character_set_name, collation_name" : ", domain_name")
                     + " FROM information_schema.columns WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position";
+        if (dialect.type() == DbType.KINGBASE) {
+            sql = "SELECT i.column_name, i.data_type, i.character_maximum_length, i.domain_name, "
+                    + "CASE WHEN a.atttypmod < 0 THEN 'BYTE' ELSE 'CHAR' END "
+                    + "FROM information_schema.columns i JOIN sys_catalog.sys_namespace n ON n.nspname=i.table_schema "
+                    + "JOIN sys_catalog.sys_class c ON c.relnamespace=n.oid AND c.relname=i.table_name "
+                    + "JOIN sys_catalog.sys_attribute a ON a.attrelid=c.oid AND a.attname=i.column_name "
+                    + "WHERE i.table_schema=? AND i.table_name=? ORDER BY i.ordinal_position";
+        }
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, owner);
             statement.setString(2, target);
@@ -75,7 +83,7 @@ public final class CharacterColumns {
                         length = positiveLength(rows, unit.equals("CHAR") ? 4 : 3);
                     } else {
                         length = positiveLength(rows, 3);
-                        unit = "CHAR";
+                        unit = dialect.type() == DbType.KINGBASE ? rows.getString(5) : "CHAR";
                         if (dialect.type() != DbType.MYSQL && rows.getString(4) != null) {
                             type = "DOMAIN " + rows.getString(4);
                         }
@@ -132,8 +140,18 @@ public final class CharacterColumns {
             if (catalog == null || catalog.isBlank()) throw new SQLException("无法确定 MySQL 当前数据库");
             return catalog;
         }
-        if (schema != null && !schema.isBlank()) return dialect.normalizeTableName(schema.trim());
-        if (dialect.type() == DbType.POSTGRESQL || dialect.type() == DbType.KINGBASE) {
+        if (schema != null && !schema.isBlank()) {
+            return dialect.type() == DbType.KINGBASE ? schema.trim() : dialect.normalizeTableName(schema.trim());
+        }
+        if (dialect.type() == DbType.KINGBASE) {
+            // 保留金仓返回的真实大小写，不能把 PUBLIC 改成 public。
+            try (Statement statement = conn.createStatement();
+                 ResultSet rows = statement.executeQuery("SELECT current_schema()")) {
+                if (rows.next() && rows.getString(1) != null) return rows.getString(1);
+            }
+            throw new SQLException("无法确定目标 Schema，请显式指定");
+        }
+        if (dialect.type() == DbType.POSTGRESQL) {
             String sql = "SELECT n.nspname FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace "
                     + "WHERE c.oid=pg_catalog.to_regclass(?::text)";
             try (PreparedStatement statement = conn.prepareStatement(sql)) {
@@ -170,7 +188,7 @@ public final class CharacterColumns {
     public static String widenSql(Dialect dialect, String schema, String table, Column column, int length) {
         String target = qualified(dialect, schema, table);
         String declaration = column.type() + "(" + length
-                + ((dialect.type() == DbType.ORACLE || dialect.type() == DbType.DAMENG)
+                + ((dialect.type() == DbType.ORACLE || dialect.type() == DbType.DAMENG || dialect.type() == DbType.KINGBASE)
                     && !column.type().startsWith("N") ? " " + column.unit() : "") + ")";
         return switch (dialect.type()) {
             case MYSQL -> {

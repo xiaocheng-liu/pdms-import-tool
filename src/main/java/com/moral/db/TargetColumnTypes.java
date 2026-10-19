@@ -28,7 +28,23 @@ public final class TargetColumnTypes {
         String sql = "SELECT " + columns + " FROM " + dialect.fullyQualified(schema, table) + " WHERE 1=0";
         List<InferredType> bindings = new ArrayList<>();
         List<String> declarations = new ArrayList<>();
-        try (Statement statement = connection.createStatement(); ResultSet rows = statement.executeQuery(sql)) {
+        if (dialect.type() == com.moral.model.DbType.KINGBASE) {
+            // V9 驱动在读取 V8 结果类型时会访问不存在的 PG_CATALOG，改读已验证的字段目录。
+            var target = CharacterColumns.read(connection, dialect, schema, table);
+            for (String column : meta.getColumns()) {
+                var actual = target.columns().get(dialect.normalizeTableName(column));
+                if (actual == null) throw new SQLException("目标表缺少列：" + table + "." + column);
+                InferredType binding = switch (actual.type()) {
+                    case "SMALLINT", "INTEGER", "BIGINT", "NUMERIC", "DECIMAL", "REAL", "DOUBLE PRECISION" -> InferredType.DECIMAL;
+                    case "DATE", "TIMESTAMP", "TIMESTAMP WITHOUT TIME ZONE" -> InferredType.DATETIME;
+                    case "CHAR", "VARCHAR" -> InferredType.STRING;
+                    case "TEXT", "CLOB", "NCLOB" -> InferredType.TEXT;
+                    default -> throw new SQLException("目标列类型暂不支持：" + column + " " + actual.type());
+                };
+                bindings.add(binding);
+                declarations.add(actual.type());
+            }
+        } else try (Statement statement = connection.createStatement(); ResultSet rows = statement.executeQuery(sql)) {
             ResultSetMetaData metadata = rows.getMetaData();
             if (metadata.getColumnCount() != meta.getProfiles().size()) {
                 throw new SQLException("目标表列元数据与 CSV 表头数量不一致：" + table);

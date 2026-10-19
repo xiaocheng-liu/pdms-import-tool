@@ -672,6 +672,7 @@ public final class ImportEngine {
                 + "WHERE n.nspname::text = ? AND tbl.relname::text = ? AND am.amname = 'btree' AND idx.indisvalid "
                 + "AND t.typname IN ('varchar', 'bpchar', 'text') "
                 + "AND (a.atttypmod < 0 OR a.atttypmod - 4 > 2704)";
+        if (type == DbType.KINGBASE) sql = sql.replace("pg_catalog.pg_", "sys_catalog.sys_");
         try (PreparedStatement statement = conn.prepareStatement(sql)) {
             statement.setString(1, schema == null || schema.isEmpty() ? "public" : schema);
             statement.setString(2, tableName);

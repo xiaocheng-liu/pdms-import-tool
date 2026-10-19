@@ -18,6 +18,14 @@ import static org.junit.Assert.*;
 /** 五种数据库的目录长度读取及扩长 SQL 回归测试。 */
 public class CharacterColumnsTest {
 
+    /** 大字段目录可能返回数据长度，但类型展示不应拼出 CLOB(4000)。 */
+    @Test public void largeObjectDisplayOmitsCatalogLength() {
+        CharacterColumns.Column clob = new CharacterColumns.Column("NOTE", "CLOB", 4000, "", "");
+        CharacterColumns.Column nclob = new CharacterColumns.Column("NOTE", "NCLOB", 4000, "", "");
+        assertEquals("CLOB", clob.display());
+        assertEquals("NCLOB", nclob.display());
+    }
+
     /** Oracle/达梦按 CHAR_USED 选择字符容量或字节容量，国家字符列始终按字符。 */
     @Test public void oracleAndDamengReadLengthUnits() throws Exception {
         for (DbType type : List.of(DbType.ORACLE, DbType.DAMENG)) {
@@ -40,11 +48,12 @@ public class CharacterColumnsTest {
     @Test public void postgresAndKingbaseReadCharacterLength() throws Exception {
         for (DbType type : List.of(DbType.POSTGRESQL, DbType.KINGBASE)) {
             var connection = connection(new ArrayList<>(), List.of(
-                    new Object[]{"code", "character varying", 100L, null},
-                    new Object[]{"flag", "character", 2L, null},
-                    new Object[]{"domain_code", "character varying", 100L, "code_domain"}), null);
+                    new Object[]{"code", "character varying", 100L, null, "CHAR"},
+                    new Object[]{"flag", "character", 2L, null, "BYTE"},
+                    new Object[]{"domain_code", "character varying", 100L, "code_domain", "CHAR"}), null);
             var table = CharacterColumns.read(connection, DialectFactory.get(type), "KBE", "DEMO");
-            assertEquals("kbe", table.schema());
+            assertEquals(type == DbType.KINGBASE ? "KBE" : "kbe", table.schema());
+            assertEquals(type == DbType.KINGBASE ? "BYTE" : "CHAR", table.columns().get("flag").unit());
             assertEquals("VARCHAR", table.columns().get("code").type());
             assertEquals("CHAR", table.columns().get("flag").type());
             assertFalse(table.columns().get("domain_code").isCharacter());
@@ -75,7 +84,8 @@ public class CharacterColumnsTest {
             String sql = CharacterColumns.widenSql(dialect, "KBE", "DEMO", column, 500);
             switch (type) {
                 case ORACLE, DAMENG -> assertEquals("ALTER TABLE \"KBE\".\"DEMO\" MODIFY (\"CODE\" VARCHAR(500 BYTE))", sql);
-                case POSTGRESQL, KINGBASE -> assertEquals("ALTER TABLE \"KBE\".\"DEMO\" ALTER COLUMN \"CODE\" TYPE VARCHAR(500)", sql);
+                case KINGBASE -> assertEquals("ALTER TABLE \"KBE\".\"DEMO\" ALTER COLUMN \"CODE\" TYPE VARCHAR(500 BYTE)", sql);
+                case POSTGRESQL -> assertEquals("ALTER TABLE \"KBE\".\"DEMO\" ALTER COLUMN \"CODE\" TYPE VARCHAR(500)", sql);
                 case MYSQL -> assertEquals("ALTER TABLE `KBE`.`DEMO` MODIFY COLUMN `CODE` varchar(500) NOT NULL", sql);
             }
         }

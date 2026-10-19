@@ -32,6 +32,11 @@ public final class DatabaseComments {
                         + "WHERE n.nspname=? AND c.relname=? AND a.attnum>0 AND NOT a.attisdropped";
             }
         }
+        if (dialect.type() == DbType.KINGBASE) {
+            tableQuery = tableQuery.replace("pg_catalog.pg_", "sys_catalog.sys_")
+                    .replace("'pg_class'", "'sys_class'");
+            columnQuery = columnQuery.replace("pg_catalog.pg_", "sys_catalog.sys_");
+        }
         try (PreparedStatement statement = connection.prepareStatement(tableQuery)) {
             statement.setString(1, schema); statement.setString(2, table);
             try (ResultSet rows = statement.executeQuery()) {

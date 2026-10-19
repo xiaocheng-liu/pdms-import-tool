@@ -69,6 +69,7 @@ public class MainFrame extends JFrame {
     /** 剩余时间估算用的近期速率（字节/毫秒），<=0 表示暂时无法估算 */
     private long lastProgressAt;
     private long lastProgressBytes;
+    private long lastByteAdvanceAt;
     private double smoothRateBytesPerMs = -1;
     private boolean running;
     private boolean closeAfterImport;
@@ -425,6 +426,7 @@ public class MainFrame extends JFrame {
         importStartedAt = System.currentTimeMillis();
         lastProgressAt = 0;
         lastProgressBytes = 0;
+        lastByteAdvanceAt = 0;
         smoothRateBytesPerMs = -1;
         startButton.setText("导入中...");
         startButton.setEnabled(false);
@@ -613,10 +615,14 @@ public class MainFrame extends JFrame {
         long now = System.currentTimeMillis();
         if (lastProgressAt > 0 && now > lastProgressAt) {
             double instant = (displayDone - lastProgressBytes) / (double) (now - lastProgressAt);
-            smoothRateBytesPerMs = smoothRateBytesPerMs <= 0
-                    ? instant
-                    : smoothRateBytesPerMs * 0.7 + instant * 0.3;
+            if (displayDone > lastProgressBytes) {
+                smoothRateBytesPerMs = smoothRateBytesPerMs <= 0
+                        ? instant
+                        : smoothRateBytesPerMs * 0.7 + instant * 0.3;
+                lastByteAdvanceAt = now;
+            }
         }
+        if (lastByteAdvanceAt == 0 && displayDone > 0) lastByteAdvanceAt = now;
         lastProgressAt = now;
         lastProgressBytes = displayDone;
 
@@ -631,6 +637,8 @@ public class MainFrame extends JFrame {
             etaText = "等待收尾提交";
         } else if (!running) {
             etaText = "—";
+        } else if (lastByteAdvanceAt > 0 && now - lastByteAdvanceAt >= 10_000) {
+            etaText = "数据暂无推进，等待数据库写入响应（详见日志批次耗时）";
         } else if (smoothRateBytesPerMs <= 0.0005) {
             etaText = "数据暂无推进，等待数据库写入响应（详见日志批次耗时）";
         } else {

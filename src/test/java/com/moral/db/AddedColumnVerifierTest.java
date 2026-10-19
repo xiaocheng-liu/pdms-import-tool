@@ -83,6 +83,18 @@ public class AddedColumnVerifierTest {
             String column = dialect.normalizeTableName("CODE");
             Connection connection = proxy(Connection.class, (method, args) -> {
                 if (method.equals("getCatalog")) return "KBE";
+                if (method.equals("prepareStatement") && ((String)args[0]).startsWith("SELECT is_nullable")) {
+                    return proxy(PreparedStatement.class, (op, params) -> {
+                        if (!op.equals("executeQuery")) return null;
+                        int[] index = {0};
+                        return proxy(ResultSet.class, (read, values) -> switch (read) {
+                            case "next" -> index[0]++ == 0;
+                            case "getString" -> nullable == ResultSetMetaData.columnNullable ? "YES" : "NO";
+                            case "getInt" -> (int)values[0] == 2 ? precision : scale;
+                            default -> null;
+                        });
+                    });
+                }
                 if (method.equals("prepareStatement")) return proxy(PreparedStatement.class, (op, params) -> {
                     if (!op.equals("executeQuery")) return null;
                     int[] index = {0};
@@ -94,7 +106,7 @@ public class AddedColumnVerifierTest {
                             case 1 -> dialect.normalizeTableName(name);
                             case 2 -> actualType;
                             case 4 -> type == DbType.MYSQL ? "utf8mb4" : null;
-                            case 5 -> type == DbType.MYSQL ? "utf8mb4_bin" : unit;
+                            case 5 -> type == DbType.MYSQL ? "utf8mb4_bin" : type == DbType.KINGBASE ? "CHAR" : unit;
                             default -> null;
                         };
                         default -> null;

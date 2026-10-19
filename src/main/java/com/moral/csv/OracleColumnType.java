@@ -32,8 +32,9 @@ public record OracleColumnType(String sql, InferredType binding) {
             if ((mysql && length > (fixed ? 255 : 4000)) || (dm && length > 2047)) {
                 return new OracleColumnType(mysql ? "LONGTEXT" : "CLOB", InferredType.TEXT);
             }
-            if (dm) {
-                return new OracleColumnType((fixed ? "CHAR(" : "VARCHAR(") + length + " CHAR)", InferredType.STRING);
+            if (dm || target == DbType.KINGBASE) {
+                String unit = target == DbType.KINGBASE && "BYTE".equals(chars.group(3)) ? "BYTE" : "CHAR";
+                return new OracleColumnType((fixed ? "CHAR(" : "VARCHAR(") + length + " " + unit + ")", InferredType.STRING);
             }
             return new OracleColumnType((fixed ? "CHAR(" : "VARCHAR(") + length + ")", InferredType.STRING);
         }

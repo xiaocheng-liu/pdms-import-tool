@@ -32,7 +32,7 @@ public class ImportDialectTest {
         for (PgDialect dialect : List.of(new PgDialect(), new KingbaseDialect())) {
             for (boolean header : new boolean[]{true, false}) {
                 String sql = dialect.buildCopyInSql("KBE", "DEMO", List.of("CODE", "NOTE"), true, header);
-                assertEquals("COPY \"kbe\".\"demo\" (\"code\", \"note\") FROM STDIN WITH (FORMAT csv, HEADER "
+                assertEquals("COPY " + dialect.fullyQualified("KBE", "DEMO") + " (\"code\", \"note\") FROM STDIN WITH (FORMAT csv, HEADER "
                         + header + ", NULL '', FORCE_NULL (\"code\", \"note\"))", sql);
             }
         }
