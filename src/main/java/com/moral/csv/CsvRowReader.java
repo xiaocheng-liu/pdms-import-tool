@@ -1,6 +1,5 @@
 package com.moral.csv;
 
-import com.moral.csv.CsvMetaReader;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVRecord;
 

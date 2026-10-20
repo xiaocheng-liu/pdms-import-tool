@@ -32,14 +32,16 @@ import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.Rectangle;
 import java.io.File;
+import java.io.IOException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutionException;
 
 /**
  * 主窗口：连接配置 → 文件夹扫描 → 表清单 → 导入选项 → 并发导入与日志。
@@ -65,7 +67,6 @@ public class MainFrame extends JFrame {
     private JSplitPane splitPane;
     private JSplitPane mainSplitPane;
     private JPanel configPanel;
-    private long importStartedAt;
     /** 剩余时间估算用的近期速率（字节/毫秒），<=0 表示暂时无法估算 */
     private long lastProgressAt;
     private long lastProgressBytes;
@@ -385,8 +386,11 @@ public class MainFrame extends JFrame {
                 SchemaPlan plan;
                 try {
                     plan = get();
-                } catch (Exception e) {
-                    Throwable cause = e.getCause() == null ? e : e.getCause();
+                } catch (InterruptedException | ExecutionException | CancellationException e) {
+                    Throwable cause = e.getCause();
+                    if (cause == null) {
+                        cause = e;
+                    }
                     logPanel.append("检查表结构失败：" + cause.getMessage(), LogPanel.Level.ERROR);
                     SwingUtil.showError(MainFrame.this, "检查表结构失败：" + cause.getMessage());
                     restorePreparationControls();
@@ -423,7 +427,6 @@ public class MainFrame extends JFrame {
     private void runImport(ConnectionConfig config, List<CsvTable> selected, SchemaPlan plan) {
         running = true;
         lastResult = null;
-        importStartedAt = System.currentTimeMillis();
         lastProgressAt = 0;
         lastProgressBytes = 0;
         lastByteAdvanceAt = 0;
@@ -446,7 +449,10 @@ public class MainFrame extends JFrame {
                 try {
                     lastResult = engine.startPrepared(selected, config, options, plan, listener);
                 } catch (Exception e) {
-                    Throwable cause = e.getCause() == null ? e : e.getCause();
+                    Throwable cause = e.getCause();
+                    if (cause == null) {
+                        cause = e;
+                    }
                     logPanel.append("导入失败：" + cause.getMessage(), LogPanel.Level.ERROR);
                     SwingUtil.showError(MainFrame.this, "导入失败：" + cause.getMessage());
                 }
@@ -523,7 +529,7 @@ public class MainFrame extends JFrame {
             long count = FailureRecorder.exportResult(lastResult, target);
             logPanel.append("已导出 " + count + " 条失败明细：" + target.getAbsolutePath(), LogPanel.Level.SUCCESS);
             SwingUtil.showInfo(this, "已导出 " + count + " 条失败明细");
-        } catch (Exception e) {
+        } catch (IOException e) {
             SwingUtil.showError(this, "导出失败：" + e.getMessage());
         }
     }

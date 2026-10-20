@@ -1,10 +1,5 @@
 package com.moral.csv;
 
-import com.moral.model.ColumnProfile;
-import org.apache.commons.csv.CSVFormat;
-import org.apache.commons.csv.CSVParser;
-import org.apache.commons.csv.CSVRecord;
-
 import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.IOException;
@@ -17,6 +12,13 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
+
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVParser;
+import org.apache.commons.csv.CSVRecord;
+import org.apache.commons.csv.DuplicateHeaderMode;
+
+import com.moral.model.ColumnProfile;
 
 /**
  * 读取 CSV 表头并对前 N 行采样，推断每列类型。
@@ -49,7 +51,13 @@ public final class CsvMetaReader {
             TypeInferencer.Inferencer inferencer = null;
             int rows = 0;
             for (CSVRecord record : parser) {
-                if (columns.isEmpty()) {
+                // 以 inferencer 是否已创建作为"表头是否已确定"的判据，
+                // 避免首行字段数为 0 时 columns 仍为空却直接进入采样分支导致的 NPE
+                if (inferencer == null) {
+                    if (record.size() == 0) {
+                        // 空记录不能作为表头，继续往后寻找真正的表头行
+                        continue;
+                    }
                     for (int i = 0; i < record.size(); i++) {
                         String name = record.get(i);
                         if (name == null || name.trim().isEmpty()) {
@@ -101,11 +109,14 @@ public final class CsvMetaReader {
 
     /** 统一的 CSV 格式：标准逗号分隔、双引号转义、忽略空行 */
     public static CSVFormat csvFormat() {
-        return CSVFormat.DEFAULT
-                .withIgnoreEmptyLines(true)
-                .withIgnoreSurroundingSpaces(false)
-                .withTrim(false)
-                .withAllowDuplicateHeaderNames(true);
+        return CSVFormat.Builder.create(CSVFormat.DEFAULT)
+                .setIgnoreEmptyLines(true)
+                .setIgnoreSurroundingSpaces(false)
+                .setTrim(false)
+                // commons-csv 1.10+ 用更精细的重复表头模式取代已弃用的 setAllowDuplicateHeaderNames，
+                // ALLOW_ALL 与其传 true 的语义完全一致（允许任意重复表头，含非空重复名）
+                .setDuplicateHeaderMode(DuplicateHeaderMode.ALLOW_ALL)
+                .build();
     }
 
     /** 取记录的前 n 个值，不足补空串 */

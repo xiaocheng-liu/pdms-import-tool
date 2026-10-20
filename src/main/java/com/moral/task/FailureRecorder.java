@@ -34,7 +34,6 @@ public final class FailureRecorder implements Closeable {
 
     private BufferedWriter sink;
     private File sinkFile;
-    private int sinkWrites;
 
     /** 失败明细实时写入的目标文件（用户主目录下 logs 目录） */
     public static File defaultLogFile() {
@@ -51,7 +50,6 @@ public final class FailureRecorder implements Closeable {
         }
         this.sink = Files.newBufferedWriter(file.toPath(), StandardCharsets.UTF_8);
         this.sinkFile = file;
-        this.sinkWrites = 0;
         sink.write("表名\t行号\t错误码\t错误信息\t原始数据");
         sink.newLine();
         sink.flush();
@@ -121,7 +119,6 @@ public final class FailureRecorder implements Closeable {
                 sink.write(record.toLine());
                 sink.newLine();
                 sink.flush();
-                sinkWrites++;
             } catch (IOException error) {
                 throw new UncheckedIOException("失败明细写入失败，请检查磁盘空间和日志目录权限", error);
             }

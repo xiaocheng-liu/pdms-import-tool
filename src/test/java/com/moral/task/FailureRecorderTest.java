@@ -1,6 +1,5 @@
 package com.moral.task;
 
-import com.moral.model.FailureRecord;
 import com.moral.model.ImportResult;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
@@ -72,14 +71,18 @@ public class FailureRecorderTest {
         assertEquals(2, FailureRecorder.exportResult(result, log));
         assertEquals(-1, Files.mismatch(log.toPath(), target.toPath()));
         Files.delete(log.toPath());
-        assertThrows(java.io.IOException.class, () -> FailureRecorder.exportResult(result, target));
+        java.io.IOException missing = assertThrows(java.io.IOException.class,
+                () -> FailureRecorder.exportResult(result, target));
+        assertTrue(missing.getMessage().contains("完整失败日志不存在"));
     }
 
     /** 没有磁盘副本且内存超限时必须显式失败。 */
     @Test
     public void missingSinkCannotSilentlyDiscardOversizedRecord() {
-        FailureRecorder recorder = new FailureRecorder();
-        assertThrows(IllegalStateException.class, () -> recorder.record(
-                "sample", 2, "22000", "bad row", "x".repeat(17 * 1024 * 1024)));
+        try (FailureRecorder recorder = new FailureRecorder()) {
+            IllegalStateException error = assertThrows(IllegalStateException.class, () -> recorder.record(
+                    "sample", 2, "22000", "bad row", "x".repeat(17 * 1024 * 1024)));
+            assertTrue(error.getMessage().contains("失败明细未能保存"));
+        }
     }
 }

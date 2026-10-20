@@ -392,7 +392,9 @@ public final class BatchingWriter {
     }
 
     private long firstLineNo() {
-        return pendingLines.isEmpty() ? 0L : pendingLines.get(0);
+        // 元素是 Long：先判空再拆箱，避免 null 元素在失败记录路径上抛 NPE 掩盖真实错误
+        Long first = pendingLines.isEmpty() ? null : pendingLines.get(0);
+        return first == null ? 0L : first;
     }
 
     private Savepoint createSavepoint() throws SQLException {
@@ -461,28 +463,25 @@ public final class BatchingWriter {
                 statement.setNull(index, sqlTypeOf(profile.getType()));
                 continue;
             }
+            // 箭头式 switch：分支天然不贯穿，避免漏写 break 导致同一列被绑定两次
             switch (profile.getType()) {
-                case LONG: {
+                case LONG -> {
                     checkNumericRepresentation(profile, value);
                     Long number = parseLong(value);
                     if (number == null) {
                         throw dataError(profile, value, "22018", 22018, "不是合法整数");
                     }
                     statement.setLong(index, number);
-                    break;
                 }
-                case DOUBLE:
-                case DECIMAL: {
+                case DOUBLE, DECIMAL -> {
                     checkNumericRepresentation(profile, value);
                     BigDecimal number = parseDecimal(value);
                     if (number == null) {
                         throw dataError(profile, value, "22018", 22018, "不是合法数字");
                     }
                     statement.setBigDecimal(index, number);
-                    break;
                 }
-                case DATE:
-                case DATETIME: {
+                case DATE, DATETIME -> {
                     // 直接绑定 Timestamp 值，交给驱动按目标列类型转换，
                     // 不再拼接 TO_DATE/TO_TIMESTAMP，避免日期格式与 NLS 设置不一致导致 ORA-01858
                     Timestamp timestamp = parseTimestamp(value);
@@ -491,33 +490,23 @@ public final class BatchingWriter {
                                 "不是合法日期时间（支持 2026-09-28、2026-09-28 09:59:47、2026/9/28 等格式）");
                     }
                     statement.setTimestamp(index, timestamp);
-                    break;
                 }
-                case TEXT:
-                    statement.setCharacterStream(index, new StringReader(value), value.length());
-                    break;
-                default:
-                    statement.setString(index, value);
-                    break;
+                case TEXT -> statement.setCharacterStream(index, new StringReader(value), value.length());
+                default -> statement.setString(index, value);
             }
         }
     }
 
     /** NULL 绑定用的 SQL 类型：必须与该列的推断类型一致，否则 PostgreSQL 会报 42804 */
     private static int sqlTypeOf(InferredType type) {
-        switch (type) {
-            case LONG:
-                return Types.BIGINT;
-            case DOUBLE:
-                return Types.DOUBLE;
-            case DECIMAL:
-                return Types.DECIMAL;
-            case DATE:
-            case DATETIME:
-                return Types.TIMESTAMP;
-            default:
-                return Types.VARCHAR;
-        }
+        // 穷举枚举常量而非 default：新增类型时编译期报错，避免悄悄按 VARCHAR 绑定导致 42804
+        return switch (type) {
+            case LONG -> Types.BIGINT;
+            case DOUBLE -> Types.DOUBLE;
+            case DECIMAL -> Types.DECIMAL;
+            case DATE, DATETIME -> Types.TIMESTAMP;
+            case TEXT, STRING -> Types.VARCHAR;
+        };
     }
 
     /** 构造带明确原因的数据行错误，便于精确记录到失败明细 */
@@ -741,14 +730,6 @@ public final class BatchingWriter {
             }
         }
         return -1;
-    }
-
-    private static String oneLine(String text) {
-        if (text == null) {
-            return "";
-        }
-        String value = text.replace("\r", " ").replace("\n", " ");
-        return value.length() > 500 ? value.substring(0, 500) + "..." : value;
     }
 
     /** 还原为一行标准 CSV，便于修复后直接重放 */

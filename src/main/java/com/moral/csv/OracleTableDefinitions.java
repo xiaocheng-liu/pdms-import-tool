@@ -28,14 +28,34 @@ public final class OracleTableDefinitions {
 
     /** null 表示脚本没有声明表注释，空字符串表示明确清空注释。 */
     public record Comments(String table, Map<String, String> columns) {
-        public Comments { columns = Map.copyOf(columns); }
-        public boolean isEmpty() { return table == null && columns.isEmpty(); }
+        /** 统一做不可变拷贝：调用方后续修改不会影响缓存中的定义；null 视作无列注释 */
+        public Comments {
+            columns = columns == null ? Map.of() : Map.copyOf(columns);
+        }
+
+        public boolean isEmpty() { return table == null && hasNoColumnComments(columns); }
+
+        /** 是否没有任何列注释：抽成具名谓词，语义比裸 {@code isEmpty()} 更直白 */
+        private static boolean hasNoColumnComments(Map<String, String> map) { return map.isEmpty(); }
+
+        /** 脚本未声明任何注释时的空结果 */
+        public static Comments empty() { return new Comments(null, Map.of()); }
+
+        /** 表注释：text 为 null 表示未声明，空字符串表示明确清空 */
+        public static Comments ofTable(String text) { return new Comments(text, Map.of()); }
+
+        /** 单列注释，供 mergeComments 逐条并入 */
+        public static Comments ofColumn(String column, String text) {
+            Map<String, String> columns = new LinkedHashMap<>();
+            columns.put(column, text);
+            return new Comments(null, columns);
+        }
     }
 
     /** 按与字段类型相同的 Schema 规则取得注释。 */
     public Comments comments(CsvTable table, Charset charset, String schema, Consumer<String> logger) throws IOException {
         TableDefinition definition = find(table, charset, schema, logger);
-        return definition == null ? new Comments(null, Map.of()) : definition.comments();
+        return definition == null ? Comments.empty() : definition.comments();
     }
 
     /** 按列名覆盖采样类型；每次检查或导入中，同一个目录只解析一次。 */
@@ -107,7 +127,7 @@ public final class OracleTableDefinitions {
                         for (String name : names) {
                             TableDefinition previous = definitions.get(name);
                             Map<String, String> columns = parsed.getOrDefault(name, Map.of());
-                            Comments notes = comments.getOrDefault(name, new Comments(null, Map.of()));
+                            Comments notes = comments.getOrDefault(name, Comments.empty());
                             if (previous != null) {
                                 if (!columns.isEmpty() && !previous.columns().isEmpty()) {
                                     throw new IOException("多个 _tables.sql 文件重复定义表 " + name);
@@ -173,8 +193,8 @@ public final class OracleTableDefinitions {
             if (cursor < tokens.size() && !is(tokens, cursor, ";")) throw new IOException("COMMENT ON 语句结尾无效");
             String field = column ? names.removeLast() : null;
             String name = String.join(".", names);
-            Comments comment = new Comments(column ? null : text, column ? Map.of(field, text) : Map.of());
-            result.put(name, mergeComments(name, result.getOrDefault(name, new Comments(null, Map.of())), comment));
+            Comments comment = column ? Comments.ofColumn(field, text) : Comments.ofTable(text);
+            result.put(name, mergeComments(name, result.getOrDefault(name, Comments.empty()), comment));
             i = cursor;
         }
         return result;

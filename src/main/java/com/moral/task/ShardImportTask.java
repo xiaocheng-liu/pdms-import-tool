@@ -23,7 +23,6 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.util.List;
 import java.util.Locale;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.Callable;

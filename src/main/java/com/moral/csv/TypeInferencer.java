@@ -19,6 +19,9 @@ public final class TypeInferencer {
     private static final int TEXT_THRESHOLD = 4000;
     /** 字符列的最小宽度：采样再准也只是抽样，太窄的列（如 varchar(2)）几乎必然超长 */
     private static final int MIN_STRING_LENGTH = 64;
+    /** long 边界文本：用于在不解析、不抛异常的前提下判断整数是否溢出 */
+    private static final String LONG_MAX_TEXT = "9223372036854775807";
+    private static final String LONG_MIN_TEXT = "-9223372036854775808";
 
     private TypeInferencer() {
     }
@@ -70,12 +73,9 @@ public final class TypeInferencer {
                 }
                 if (!INTEGER.matcher(value).matches()) {
                     allInteger[i] = false;
-                } else if (allInteger[i]) {
-                    try {
-                        Long.parseLong(value);
-                    } catch (NumberFormatException error) {
-                        allInteger[i] = false;
-                    }
+                } else if (allInteger[i] && !fitsLong(value)) {
+                    // 正则已保证是规范整数串，这里只需判断是否超出 long 取值范围
+                    allInteger[i] = false;
                 }
                 if (!DECIMAL.matcher(value).matches()) {
                     allDecimal[i] = false;
@@ -87,6 +87,19 @@ public final class TypeInferencer {
                     allDateTime[i] = false;
                 }
             }
+        }
+
+        /**
+         * 判断规范整数串能否放入 long：位数不足边界长度必然可容纳，等长时按字典序比较。
+         *
+         * <p>相比 {@code Long.parseLong} 捕获异常，这里无解析、无临时对象、无异常开销。
+         * 负号后等长数字串的字典序与数值序相反（{@code -...809 < -...808}），故负数取 {@code <=}。
+         */
+        private static boolean fitsLong(String value) {
+            if (value.charAt(0) == '-') {
+                return value.length() < LONG_MIN_TEXT.length() || value.compareTo(LONG_MIN_TEXT) <= 0;
+            }
+            return value.length() < LONG_MAX_TEXT.length() || value.compareTo(LONG_MAX_TEXT) <= 0;
         }
 
         /** 采样结束后确定最终类型 */

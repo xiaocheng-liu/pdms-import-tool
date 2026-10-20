@@ -13,7 +13,6 @@ import java.lang.reflect.InvocationTargetException;
 import java.nio.file.Files;
 import java.sql.*;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
 
 import static com.moral.task.BatchingWriterTest.proxy;
