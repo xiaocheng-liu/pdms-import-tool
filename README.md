@@ -19,7 +19,7 @@
 ### Windows
 
 1. 安装 JDK 21 及以上（建议设置环境变量 `JAVA_HOME`，并把 `%JAVA_HOME%\bin` 加入 `PATH`）
-2. 双击 `run.bat`：优先用同目录 `jdk-path.txt` 指定的 JDK，未指定时用 PATH 中的 `java`；启动前会校验版本，低于 21 时提示并退出，启动后打印实际使用的 java 路径与 JDK 版本
+2. 双击 `run.bat`：优先用同目录 `jdk-path.txt` 指定的 JDK，未指定时用 PATH 中的 `java`；检查 Java 可用后，使用同一 JDK 的 `javaw.exe` 启动；启动成功后命令行窗口自动关闭，出错时保留提示（运行需要 JDK 21 及以上）
 
 Windows 端装了多个 JDK 时，在 `jdk-path.txt` 里写一行 JDK 安装目录即可固定版本（路径无效会明确报错并暂停，不会悄悄改用其它版本）；也可把 JDK 21 的 `bin` 目录放到 `PATH` 最前面。
 

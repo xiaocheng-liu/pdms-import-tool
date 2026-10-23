@@ -10,7 +10,7 @@ PDMS 数据导入工具 1.0 —— 实施部署与使用说明（快速版）
   3. 无需安装 Maven、无需联网（三种数据库驱动已打进 jar 内）
 
 二、启动
-  Windows   ：双击 run.bat（会弹出一个命令行窗口，导入过程中请勿关闭）
+  Windows   ：双击 run.bat（启动时短暂显示命令行窗口，启动成功后自动关闭；出错时保留提示）
              直接用 PATH 中的 java 启动；Java 版本低于 21 时会提示并退出
   macOS/Linux：终端执行 ./run.sh；指定 JDK：./run.sh /opt/jdk-21
   手动启动  ：java -Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8 -Xms1g -Xmx2g -jar pdms-import-tool.jar

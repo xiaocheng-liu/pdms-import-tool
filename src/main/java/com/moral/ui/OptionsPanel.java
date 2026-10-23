@@ -34,10 +34,10 @@ public class OptionsPanel extends JPanel {
     private final JComboBox<ImportOptions.ClearMode> clearCombo =
             new JComboBox<>(ImportOptions.ClearMode.values());
     private final JCheckBox fastModeCheck = new JCheckBox("极速模式");
-    private final JCheckBox autoCreateCheck = new JCheckBox("缺表时创建");
-    private final JCheckBox syncCommentsCheck = new JCheckBox("同步表/字段注释");
-    private final JCheckBox addColumnsCheck = new JCheckBox("补充缺失字段");
-    private final JCheckBox syncLengthsCheck = new JCheckBox("字符字段扩长");
+    private final JCheckBox autoCreateCheck = new JCheckBox("缺表时创建", true);
+    private final JCheckBox syncCommentsCheck = new JCheckBox("同步表/字段注释", true);
+    private final JCheckBox addColumnsCheck = new JCheckBox("补充缺失字段", true);
+    private final JCheckBox syncLengthsCheck = new JCheckBox("字符字段扩长", true);
     private final JCheckBox emptyAsNullCheck = new JCheckBox("空字符串转 NULL");
     private final JCheckBox continueOnErrorCheck = new JCheckBox("失败后继续");
     private final JCheckBox sanitizeCrCheck = new JCheckBox("清洗裸回车");
